@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Protocol/VpnSample.Protocol.csproj" />
+  <Project Path="Os.Linux/VpnSample.Os.Linux.csproj" />
+  <Project Path="Client/Client.csproj" />
+  <Project Path="Server/Server.csproj" />
+</Solution>

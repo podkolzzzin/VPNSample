@@ -1,0 +1,9 @@
+.vpn-droplet.env
+.vpn-ssh-key
+.vpn-ssh-key.pub
+.idea/
+.agents/
+.codex/
+**/bin/
+**/obj/
+*.swp
