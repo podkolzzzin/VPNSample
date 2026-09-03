@@ -8,7 +8,7 @@ trace_packets=$4
 trace_hex=$5
 trace_pcap=${6-}
 [[ $trace_pcap == - ]] && trace_pcap=
-profile=${7-baseline}
+profile=${7-shuffle-split}
 tls_server_name=$8
 export DEBIAN_FRONTEND=noninteractive
 

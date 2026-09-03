@@ -7,7 +7,7 @@ encoding so subsequent tricks can be added as plug-ins.
 
 ## Current implementation status
 
-The no-tricks foundation is implemented:
+The extensible foundation and the first transformation profile are implemented:
 
 - `TunnelPipeline` owns the bidirectional pumps.
 - `ITunnelStage` defines outbound and inbound decorators.
@@ -20,9 +20,15 @@ The no-tricks foundation is implemented:
   valid HTTP/1.1 Upgrade on `/vpn` before the VPN handshake.
 - `TunnelProfileFactory.Create` selects a named profile in one place; its
   `baseline` case composes tracing and pass-through stages.
+- `PacketShuffleStage` buffers up to three whole packets for at most 5 ms and
+  deliberately emits them in another order.
+- `FragmentStage` splits packets into 256-byte tunnel frames and validates and
+  reassembles them on receipt.
+- `shuffle-split` composes tracing, packet shuffling, and fragmentation while
+  leaving `baseline` available for comparison.
 
-Fragmentation, reordering, delays, masking, and routing policies remain planned;
-none of those tricks are enabled by the baseline profile.
+Delays beyond the bounded shuffle window, dropping, padding, aggregation,
+alternative masking, and routing policies remain planned.
 
 ```text
 TUN
@@ -71,8 +77,8 @@ await using var pipeline = new TunnelPipelineBuilder(
         "fragment-demo",
         new LengthPrefixedCodec())
     .Use(new PacketTraceStage("client"))
-    .Use(new FragmentStage(maxPayload: 400))
-    .Use(new ReorderStage(windowSize: 3))
+    .Use(new PacketShuffleStage(windowSize: 3, TimeSpan.FromMilliseconds(5)))
+    .Use(new FragmentStage(maximumFragmentLength: 256))
     .Build();
 
 await pipeline.RunAsync(tun, transport);
@@ -120,7 +126,9 @@ Protocol/
   Stages/
     PacketTraceStage.cs
     PassThroughStage.cs
-    # Future: FragmentStage.cs, ReorderStage.cs, DelayStage.cs
+    FragmentStage.cs
+    PacketShuffleStage.cs
+    # Future: DelayStage.cs, PaddingStage.cs
   Codecs/
     LengthPrefixedCodec.cs
     # Future: HttpLikeCodec.cs
@@ -135,19 +143,22 @@ Os.Linux/
 ## Important protocol details
 
 1. Every tunnel packet receives a packet ID before the stage chain, together
-   with a fragment index and fragment count in its wire envelope. Future
-   splitting and reassembly stages should preserve these fields.
+   with a fragment index and fragment count in its wire envelope. Splitting and
+   reassembly preserve and validate these fields.
 2. The client/server handshake carries the protocol version and selected
    profile. Mismatched profiles are rejected before frame exchange.
-3. Make stage order visible in the profile because stages may not commute. For
-   example, fragmenting before reordering demonstrates reordered fragments,
-   while reordering before fragmenting demonstrates reordered IP packets.
+3. Make stage order visible in the profile because stages may not commute. The
+   implemented profile reorders complete IP packets before fragmenting them.
 4. Keep the implemented pass-through profile so every experiment can be
    compared with the current baseline.
 
 Splitting TCP `WriteAsync` calls is not meaningful packet splitting. TCP may
 merge or divide writes arbitrarily. Split explicit tunnel frames, or use UDP if
 the demonstration is intended to show real transport-level reordering.
+
+The current transformations perturb the encrypted inner traffic but are not an
+anti-DPI guarantee. TLS metadata, the endpoint, traffic volume, record sizes,
+and timing remain observable.
 
 ## Recommended pattern summary
 

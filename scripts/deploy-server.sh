@@ -16,7 +16,7 @@ SSH_KNOWN_HOSTS_FILE=${SSH_KNOWN_HOSTS_FILE:-}
 VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
-VPN_PROFILE=${VPN_PROFILE:-baseline}
+VPN_PROFILE=${VPN_PROFILE:-shuffle-split}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
 VPN_TLS_CERTIFICATE=${VPN_TLS_CERTIFICATE:-}
 VPN_TLS_PRIVATE_KEY=${VPN_TLS_PRIVATE_KEY:-}
@@ -30,7 +30,7 @@ Publish the VPN server, install its runtime and networking prerequisites on the
 recorded droplet, and start it as vpnsample.service.
 
 Environment: VPN_STATE_FILE, SSH_USER (default: root), VPN_TRACE_PACKETS,
-VPN_TRACE_HEX, VPN_TRACE_PCAP, VPN_PROFILE (default: baseline), and optional
+VPN_TRACE_HEX, VPN_TRACE_PCAP, VPN_PROFILE (default: shuffle-split), and optional
 SSH_KNOWN_HOSTS_FILE. HTTPS uses VPN_TLS_SERVER_NAME (default:
 vpn.twocubes.io). Set both VPN_TLS_CERTIFICATE and VPN_TLS_PRIVATE_KEY to deploy
 an existing PEM certificate; otherwise a temporary pinned certificate is made.

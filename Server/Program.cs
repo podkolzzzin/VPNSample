@@ -15,7 +15,7 @@ if (args is ["--print-networks"])
 
 int port = args.Length == 0 ? network.DefaultPort : int.Parse(args[0]);
 string profileName = Environment.GetEnvironmentVariable("VPN_PROFILE") ??
-    TunnelProfileFactory.BaselineProfileName;
+    TunnelProfileFactory.DefaultProfileName;
 if (!TunnelProfileFactory.IsSupported(profileName))
     throw new ArgumentException($"Unknown tunnel profile: '{profileName}'.", nameof(profileName));
 string tlsServerName = Environment.GetEnvironmentVariable("VPN_TLS_SERVER_NAME") ??

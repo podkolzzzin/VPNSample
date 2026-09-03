@@ -26,7 +26,7 @@ if (args.Length != 2)
 string server = args[0];
 int port = int.Parse(args[1]);
 string profileName = Environment.GetEnvironmentVariable("VPN_PROFILE") ??
-    TunnelProfileFactory.BaselineProfileName;
+    TunnelProfileFactory.DefaultProfileName;
 if (!TunnelProfileFactory.IsSupported(profileName))
     throw new ArgumentException($"Unknown tunnel profile: '{profileName}'.", nameof(profileName));
 

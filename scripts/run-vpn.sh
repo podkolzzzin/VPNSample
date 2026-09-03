@@ -15,7 +15,7 @@ VPN_ROUTE_METRIC=${VPN_ROUTE_METRIC:-50}
 VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
-VPN_PROFILE=${VPN_PROFILE:-baseline}
+VPN_PROFILE=${VPN_PROFILE:-shuffle-split}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-}
 VPN_TLS_PINNED_CERTIFICATE=${VPN_TLS_PINNED_CERTIFICATE:-}
 peer_only=false
@@ -39,7 +39,7 @@ Environment:
   VPN_TRACE_PACKETS  Set to 1 for compact packet summaries
   VPN_TRACE_HEX      Set to 1 to add a multiline hexadecimal dump
   VPN_TRACE_PCAP     Base path for a Wireshark-compatible capture
-  VPN_PROFILE        Tunnel pipeline profile (default: baseline)
+  VPN_PROFILE        Tunnel pipeline profile (default: shuffle-split)
   VPN_TLS_SERVER_NAME  HTTPS SNI/Host name (state file default: vpn.twocubes.io)
   VPN_TLS_PINNED_CERTIFICATE  Optional pinned server certificate
 EOF

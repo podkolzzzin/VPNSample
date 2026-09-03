@@ -40,3 +40,8 @@ The full disposable integration test is:
 ```bash
 ./scripts/e2e-three-node.sh
 ```
+
+The current stage defaults deployment and client scripts to the
+`shuffle-split` pipeline profile. Set `VPN_PROFILE=baseline` consistently for
+both sides when demonstrating the same HTTPS transport without packet
+reordering or tunnel-frame fragmentation.

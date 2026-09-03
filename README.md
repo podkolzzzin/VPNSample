@@ -13,6 +13,11 @@ The wire transport uses TLS 1.2/1.3 plus an HTTP/1.1 Upgrade at
 but clients do not authenticate themselves to the server yet. This remains a
 learning project rather than a production VPN.
 
+The default `shuffle-split` profile adds two visible pipeline stages: it
+reorders windows of up to three IP packets and splits each packet into tunnel
+fragments of at most 256 bytes. Set `VPN_PROFILE=baseline` on both peers to
+compare it with the unmodified packet flow.
+
 ## Requirements
 
 - Linux on both machines
@@ -28,6 +33,8 @@ From this directory:
 ```bash
 dotnet build VPNSample.slnx
 ```
+
+This commit is the fifth demo stage, `stage-05-packet-shuffle-split`.
 
 Move through the tagged demo stages from any checked-out stage:
 
@@ -200,10 +207,25 @@ sudo env VPN_TRACE_PACKETS=1 VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   dotnet run --project Client -- SERVER_IP 443
 ```
 
-The core architecture currently provides only the no-tricks `baseline` profile.
-Both peers must select the same profile. The automation scripts default to
-`VPN_PROFILE=baseline`; future profiles can be selected while deploying and
-running without changing the client or server composition roots.
+The core architecture provides two profiles. `baseline` traces and forwards
+each packet unchanged. The default `shuffle-split` profile additionally buffers
+up to three packets for at most 5 ms, changes their order, and splits each into
+256-byte tunnel frames. Both peers must select the same profile:
+
+```bash
+VPN_PROFILE=shuffle-split ./scripts/deploy-server.sh
+VPN_PROFILE=shuffle-split ./scripts/run-vpn.sh
+```
+
+Packet splitting here is explicit tunnel-frame fragmentation, not a sequence of
+smaller TCP writes. Packet shuffling is deliberate IP-packet reordering; TCP
+inside the tunnel can recover through its own sequence numbers, while protocols
+that depend on UDP arrival order may observe the change.
+
+These transformations alter encrypted record sizes, timing, and correspondence
+between inner packets and writes, but they do not guarantee DPI evasion. A
+network observer can still fingerprint TLS behavior and see the destination,
+traffic volume, and timing.
 
 These modes trace the raw IP packets at each TUN boundary. Address changes
 performed later by server NAT are outside the application and require an
@@ -241,18 +263,20 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
 ## How the code is split
 
 - `Client/Program.cs` and `Server/Program.cs` open a TCP connection, create a TUN
-  endpoint, select the baseline profile, and run its tunnel pipeline.
+  endpoint, select a named profile, and run its tunnel pipeline.
 - `Protocol/IPacketEndpoint.cs` is the OS-neutral boundary consumed by the protocol.
 - `Protocol/TunnelNetwork.cs` contains the tunnel port, networks, interface names,
   prefix lengths, and address assignment rule.
 - `Protocol/TunnelPipeline.cs` pumps frames in both directions and applies
   `ITunnelStage` decorators in forward/reverse order.
-- `Protocol/TunnelFrame.cs` provides stable packet and fragment metadata for
-  future transformations.
+- `Protocol/TunnelFrame.cs` provides stable packet and fragment metadata.
 - `Protocol/Codecs/LengthPrefixedCodec.cs` owns the baseline wire format behind
   the `IWireCodec` strategy boundary.
-- `Protocol/Profiles/TunnelProfileFactory.cs` is the composition point for the
-  current baseline and future demonstration profiles.
+- `Protocol/Profiles/TunnelProfileFactory.cs` composes the `baseline` and
+  `shuffle-split` demonstration profiles.
+- `Protocol/Stages/PacketShuffleStage.cs` reorders small outbound packet windows
+  and flushes sparse traffic after a short bounded delay.
+- `Protocol/Stages/FragmentStage.cs` splits and reassembles tunnel frames.
 - `Protocol/Stages/PacketTraceStage.cs`, `PacketTrace.cs`,
   `IpPacketFormatter.cs`, and `PcapWriter.cs` implement packet observation
   independently of framing and transport orchestration.

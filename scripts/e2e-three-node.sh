@@ -21,7 +21,7 @@ SERVER_REGION=${SERVER_REGION:-ams3}
 CLIENT_A_REGION=${CLIENT_A_REGION:-fra1}
 CLIENT_B_REGION=${CLIENT_B_REGION:-nyc3}
 DO_SIZE=${DO_SIZE:-s-1vcpu-1gb}
-VPN_PROFILE=${VPN_PROFILE:-baseline}
+VPN_PROFILE=${VPN_PROFILE:-shuffle-split}
 
 usage() {
   cat <<'EOF'
@@ -37,7 +37,7 @@ Environment:
   CLIENT_A_REGION  nginx client region (default: fra1)
   CLIENT_B_REGION  requester client region (default: nyc3)
   DO_SIZE          Droplet size (default: s-1vcpu-1gb)
-  VPN_PROFILE      Tunnel pipeline profile (default: baseline)
+  VPN_PROFILE      Tunnel pipeline profile (default: shuffle-split)
 
 Prerequisites: authenticated doctl, dotnet 10, ssh, scp, and ssh-keygen.
 This test creates billable DigitalOcean resources for the duration of the run.

@@ -43,6 +43,64 @@ public sealed class TunnelPipelineIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task ShuffleSplitTransfersSeveralLargePacketsInBothDirections()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var client = new TcpClient();
+        Task<TcpClient> accept = listener.AcceptTcpClientAsync();
+        await client.ConnectAsync((IPEndPoint)listener.LocalEndpoint);
+        using TcpClient server = await accept;
+        listener.Stop();
+
+        using (client)
+        using (var clientPackets = new TestPacketEndpoint())
+        using (var serverPackets = new TestPacketEndpoint())
+        await using (TunnelPipeline clientPipeline = TunnelProfileFactory.CreateShuffleSplit("test"))
+        await using (TunnelPipeline serverPipeline = TunnelProfileFactory.CreateShuffleSplit("test"))
+        using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            Task clientRun = clientPipeline.RunAsync(clientPackets, client.GetStream(), stop.Token);
+            Task serverRun = serverPipeline.RunAsync(serverPackets, server.GetStream(), stop.Token);
+            byte[][] requests = Packets(0x40);
+            byte[][] responses = Packets(0x60);
+
+            foreach (byte[] packet in requests)
+                await clientPackets.EnqueueAsync(packet, stop.Token);
+            foreach (byte[] packet in responses)
+                await serverPackets.EnqueueAsync(packet, stop.Token);
+
+            byte[][] receivedRequests = await ReadPacketsAsync(serverPackets, stop.Token);
+            byte[][] receivedResponses = await ReadPacketsAsync(clientPackets, stop.Token);
+            Assert.Equal(SortedHex(requests), SortedHex(receivedRequests));
+            Assert.Equal(SortedHex(responses), SortedHex(receivedResponses));
+
+            stop.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                Task.WhenAll(clientRun, serverRun));
+        }
+    }
+
+    static byte[][] Packets(byte marker) =>
+        Enumerable.Range(0, 3)
+            .Select(index => Enumerable.Repeat((byte)(marker + index), 900 + index).ToArray())
+            .ToArray();
+
+    static async Task<byte[][]> ReadPacketsAsync(
+        TestPacketEndpoint endpoint,
+        CancellationToken cancellationToken)
+    {
+        var packets = new byte[3][];
+        for (int index = 0; index < packets.Length; index++)
+            packets[index] = await endpoint.ReadWrittenPacketAsync(cancellationToken);
+        return packets;
+    }
+
+    static string[] SortedHex(IEnumerable<byte[]> packets) =>
+        packets.Select(Convert.ToHexString).Order().ToArray();
+
     sealed class TestPacketEndpoint : IPacketEndpoint, IDisposable
     {
         readonly PacketReadStream reader = new();

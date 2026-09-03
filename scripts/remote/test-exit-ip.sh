@@ -16,6 +16,7 @@ dotnet_bin=$5
 client_dll=$6
 tls_server_name=$7
 pinned_certificate=${8:-}
+profile=${9:-shuffle-split}
 route_metric=50
 client_log=${status_file%/*}/vpn-client.log
 client_pid=
@@ -115,6 +116,7 @@ read -r server_tunnel_v4 server_tunnel_v6 \
 log "Connecting the probe to https://$tls_server_name:$vpn_port/vpn..."
 env VPN_TLS_SERVER_NAME="$tls_server_name" \
   VPN_TLS_PINNED_CERTIFICATE="$pinned_certificate" \
+  VPN_PROFILE="$profile" \
   "$dotnet_bin" "$client_dll" "$server_ipv4" "$vpn_port" >"$client_log" 2>&1 &
 client_pid=$!
 

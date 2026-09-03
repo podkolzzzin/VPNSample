@@ -19,6 +19,7 @@ DO_REGION=${DO_REGION:-ams3}
 DO_SIZE=${DO_SIZE:-s-1vcpu-1gb}
 DO_IMAGE=${DO_IMAGE:-ubuntu-24-04-x64}
 PROBE_NAME=${PROBE_NAME:-vpnsample-iptest-$(date -u +%Y%m%d-%H%M%S)}
+VPN_PROFILE=${VPN_PROFILE:-shuffle-split}
 
 usage() {
   cat <<'EOF'
@@ -27,7 +28,8 @@ Usage: ./e2e_vpn_iptest.sh
 Redeploy the server recorded in .vpn-droplet.env, create one disposable probe
 droplet, and verify its public IPv4 and IPv6 while the full tunnel is active.
 
-Environment: VPN_SERVER_STATE, DO_REGION, DO_SIZE, DO_IMAGE, and PROBE_NAME.
+Environment: VPN_SERVER_STATE, DO_REGION, DO_SIZE, DO_IMAGE, PROBE_NAME, and
+VPN_PROFILE (default: shuffle-split).
 EOF
 }
 
@@ -70,7 +72,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 log "Deploying the current VPN server build to $SERVER_IPV4..."
-VPN_STATE_FILE=$SERVER_STATE "$DEPLOY_SERVER"
+VPN_STATE_FILE=$SERVER_STATE VPN_PROFILE=$VPN_PROFILE "$DEPLOY_SERVER"
 load_state "$SERVER_STATE"
 SERVER_PORT=${VPN_PORT:-443}
 SERVER_TLS_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
@@ -115,7 +117,7 @@ remote_log=$remote_dir/result.log
 remote_dotnet=$remote_dir/dotnet/dotnet
 remote_client=$remote_dir/app/Client.dll
 ssh "${SSH_OPTIONS[@]}" "$remote" \
-  "chmod +x '$remote_dir/test-exit-ip.sh'; rm -f '$remote_status' '$remote_log'; nohup '$remote_dir/test-exit-ip.sh' '$remote_status' '$SERVER_IPV4' '$SERVER_IPV6' '$SERVER_PORT' '$remote_dotnet' '$remote_client' '$SERVER_TLS_NAME' '$remote_certificate' >'$remote_log' 2>&1 </dev/null &"
+  "chmod +x '$remote_dir/test-exit-ip.sh'; rm -f '$remote_status' '$remote_log'; nohup '$remote_dir/test-exit-ip.sh' '$remote_status' '$SERVER_IPV4' '$SERVER_IPV6' '$SERVER_PORT' '$remote_dotnet' '$remote_client' '$SERVER_TLS_NAME' '$remote_certificate' '$VPN_PROFILE' >'$remote_log' 2>&1 </dev/null &"
 
 log "The detached test may interrupt SSH while replacing its default route."
 test_finished=false

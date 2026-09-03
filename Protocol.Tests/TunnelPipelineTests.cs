@@ -35,6 +35,8 @@ public sealed class TunnelPipelineTests
     [Fact]
     public void ProfileFactoryRejectsUnknownProfile()
     {
+        Assert.True(TunnelProfileFactory.IsSupported(
+            TunnelProfileFactory.ShuffleSplitProfileName));
         Assert.False(TunnelProfileFactory.IsSupported("unknown"));
         Assert.Throws<ArgumentException>(() => TunnelProfileFactory.Create("unknown", "test"));
     }

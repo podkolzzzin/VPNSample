@@ -11,7 +11,7 @@ flowchart LR
         Route[Linux routing]
         CTun[svpn0<br/>10.8.0.X/24 / fd42:8::X/64]
         CLinux[LinuxTunDevice]
-        CProtocol[TunnelPipeline<br/>baseline profile]
+        CProtocol[TunnelPipeline<br/>shuffle-split profile]
         CTcp[SslStream<br/>HTTPS Upgrade]
 
         App <--> Route
@@ -25,7 +25,7 @@ flowchart LR
 
     subgraph Droplet[DigitalOcean Ubuntu droplet]
         STcp[SslStream<br/>HTTPS Upgrade]
-        SProtocol[TunnelPipeline per connection<br/>baseline profile]
+        SProtocol[TunnelPipeline per connection<br/>shuffle-split profile]
         Router[TunnelPacketRouter<br/>overlay IP → connection]
         SLinux[LinuxTunDevice]
         STun[one svpn0<br/>10.8.0.1/24 / fd42:8::1/64]
@@ -90,19 +90,24 @@ flowchart TB
 клієнті endpoint — TUN, а на сервері для кожного connection це channel-backed
 `RoutedPacketEndpoint`. Outbound-стадії
 виконуються в порядку реєстрації, а inbound-стадії — у зворотному порядку. Це
-дозволяє майбутній стадії кодувати кадр на клієнті й симетрично декодувати його
-на сервері. Поточний `baseline`-профіль містить лише tracing і pass-through.
+дозволяє кодувати кадр на клієнті й симетрично декодувати його на сервері.
+`baseline` містить tracing і pass-through. Стандартний `shuffle-split` додає
+перестановку вікон до трьох IP-пакетів із flush через 5 ms, а потім ділить
+кожен пакет на tunnel fragments розміром до 256 байтів.
 
 ```mermaid
 flowchart LR
     TunRead[TUN PacketReader] --> Frame[TunnelFrame]
-    Frame --> Outbound[Outbound stages]
-    Outbound --> Codec[LengthPrefixedCodec]
+    Frame --> TraceOut[PacketTraceStage]
+    TraceOut --> Shuffle[PacketShuffleStage]
+    Shuffle --> Fragment[FragmentStage]
+    Fragment --> Codec[LengthPrefixedCodec]
     Codec --> TcpWrite[SslStream]
 
     TcpRead[SslStream] --> Decode[LengthPrefixedCodec]
-    Decode --> Inbound[Inbound stages, reverse order]
-    Inbound --> TunWrite[TUN PacketWriter]
+    Decode --> Reassemble[FragmentStage reassembly]
+    Reassemble --> TraceIn[PacketTraceStage]
+    TraceIn --> TunWrite[TUN PacketWriter]
 ```
 
 Перед обміном кадрами обидві сторони надсилають handshake з magic `SVPN`,
@@ -120,8 +125,9 @@ flowchart LR
 +---------------+--------------+----------------+----------------+------------------+
 ```
 
-У baseline кожен пакет має `fragmentIndex = 0` і `fragmentCount = 1`. Поля
-фрагментації вже є в envelope, але жодна fragmentation-стадія ще не реалізована.
+У `baseline` кожен пакет має `fragmentIndex = 0` і `fragmentCount = 1`. У
+`shuffle-split` `FragmentStage` створює кілька кадрів зі спільним `packet ID`, а
+на приймальній стороні перевіряє індекси та загальний розмір перед reassembly.
 
 ## Послідовність розгортання і запуску
 
@@ -158,8 +164,8 @@ sequenceDiagram
     Host-->>Client: Номер клієнта N
     Host->>Host: Зареєструвати IP клієнта у TunnelPacketRouter
     Client->>Client: Створити svpn0 з host N+2 у спільному subnet
-    Client->>Host: Handshake version + baseline profile
-    Host-->>Client: Handshake version + baseline profile
+    Client->>Host: Handshake version + shuffle-split profile
+    Host-->>Client: Handshake version + shuffle-split profile
     Client->>Host: Запустити tunnel pumps
     Run->>Run: Перевірити IPv4 та IPv6 peers
     Run->>Run: Перемкнути IPv4 default route
@@ -177,7 +183,8 @@ sequenceDiagram
 flowchart LR
     Browser[Firefox] --> CRoute[Маршрути клієнта]
     CRoute --> ClientTun[svpn0]
-    ClientTun --> Frame[TunnelFrame envelope + IP packet]
+    ClientTun --> Shuffle[Shuffle packet window]
+    Shuffle --> Frame[Split into TunnelFrames]
     Frame --> HTTPS[TLS + HTTP Upgrade<br/>TCP 443]
     HTTPS --> Unframe[Відновлений IP packet]
     Unframe --> Router[TunnelPacketRouter]
@@ -243,5 +250,9 @@ sequenceDiagram
 - Сервер має 253 адреси клієнтів і повторно використовує адресу після відключення.
 - TLS автентифікує сервер, але клієнти поки не мають власних identities/certificates.
 - Транспорт працює поверх TCP, тому можливий ефект TCP-over-TCP під час втрат пакетів.
+- `shuffle-split` змінює внутрішній потік, але не приховує destination IP, TLS
+  fingerprint, загальний обсяг або timing і не гарантує обхід DPI.
+- Packet reordering може бути помітний протоколам поверх UDP; TCP відновлює
+  порядок власним sequence space.
 - IPv6 назовні використовує NAT66, а не делегований клієнту глобальний IPv6 prefix.
 - Це навчальна реалізація, а не production VPN із керуванням користувачами, ротацією ключів та kill switch.
