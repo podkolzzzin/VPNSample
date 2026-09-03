@@ -64,9 +64,11 @@ public sealed class LinuxTunDevice : IPacketEndpoint, IAsyncDisposable
     static async Task ConfigureAsync(LinuxTunOptions options)
     {
         await RunAsync("ip", "-4", "addr", "replace", options.Ipv4Address,
-            "peer", options.Ipv4Peer, "dev", options.Name);
-        await RunAsync("ip", "-6", "addr", "replace", options.Ipv6Address,
             "dev", options.Name);
+        await RunAsync("ip", "link", "set", "dev", options.Name,
+            "addrgenmode", "none");
+        await RunAsync("ip", "-6", "addr", "replace", options.Ipv6Address,
+            "nodad", "dev", options.Name);
         await RunAsync("ip", "link", "set", options.Name, "up");
     }
 
@@ -128,5 +130,4 @@ public sealed class LinuxTunDevice : IPacketEndpoint, IAsyncDisposable
 public sealed record LinuxTunOptions(
     string Name,
     string Ipv4Address,
-    string Ipv4Peer,
     string Ipv6Address);

@@ -89,8 +89,12 @@ if [[ ! -f $CLIENT_DLL ]]; then
 fi
 read -r ipv4_route_probe ipv6_route_probe \
   < <("$dotnet_bin" "$CLIENT_DLL" --print-route-probes)
+read -r server_ipv4 server_ipv6 \
+  < <("$dotnet_bin" "$CLIENT_DLL" --print-server-addresses)
 [[ -n $ipv4_route_probe && -n $ipv6_route_probe ]] \
   || fail "Client did not report its route probe addresses."
+[[ -n $server_ipv4 && -n $server_ipv6 ]] \
+  || fail "Client did not report the server's overlay addresses."
 vpn_routes_capture "$DROPLET_IP"
 
 client_pid=
@@ -125,13 +129,9 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 
-server_ipv4=$(ip -o -4 address show dev svpn0 \
-  | awk '{ for (i = 1; i <= NF; i++) if ($i == "peer") { split($(i + 1), address, "/"); print address[1]; exit } }')
 client_ipv6=$(ip -o -6 address show dev svpn0 scope global \
   | awk '{ split($4, address, "/"); print address[1]; exit }')
-[[ -n $server_ipv4 ]] || fail "Could not read the assigned IPv4 peer from svpn0."
-[[ $client_ipv6 == *::2 ]] || fail "Could not read the assigned IPv6 address from svpn0."
-server_ipv6=${client_ipv6%2}1
+[[ -n $client_ipv6 ]] || fail "Could not read the assigned IPv6 address from svpn0."
 
 log "Tunnel is up. Testing IPv4 and IPv6 peers..."
 ping -c 1 -W 3 "$server_ipv4" >/dev/null || fail "IPv4 tunnel peer did not answer."

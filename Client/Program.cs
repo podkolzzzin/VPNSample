@@ -10,6 +10,12 @@ if (args is ["--print-route-probes"])
     return;
 }
 
+if (args is ["--print-server-addresses"])
+{
+    Console.WriteLine($"{network.ServerIpv4} {network.ServerIpv6}");
+    return;
+}
+
 if (args.Length != 2)
 {
     Console.WriteLine("Usage: sudo dotnet run --project Client -- <server> <port>");
@@ -35,12 +41,11 @@ TunnelAddresses addresses = network.GetAddresses(clientNumber);
 await using var tun = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
     Name: network.ClientInterfaceName,
     Ipv4Address: $"{addresses.ClientIpv4}/{network.Ipv4InterfacePrefixLength}",
-    Ipv4Peer: addresses.ServerIpv4,
     Ipv6Address: $"{addresses.ClientIpv6}/{network.Ipv6InterfacePrefixLength}"));
 
 Console.WriteLine($"Connected as client {clientNumber}.");
-Console.WriteLine($"IPv4: {addresses.ClientIpv4} -> {addresses.ServerIpv4}");
-Console.WriteLine($"IPv6: {addresses.ClientIpv6} -> {addresses.ServerIpv6}");
+Console.WriteLine($"IPv4: {addresses.ClientIpv4} in {network.Ipv4Network}");
+Console.WriteLine($"IPv6: {addresses.ClientIpv6} in {network.Ipv6Network}");
 Console.WriteLine($"Tunnel profile: {profileName}");
 await using var pipeline = TunnelProfileFactory.Create(profileName, "client");
 await pipeline.RunAsync(tun, transport);

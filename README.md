@@ -1,7 +1,9 @@
 # Simple IP tunnel (.NET 10 / C#)
 
 A small Linux-only learning project. Every client gets a dual-stack TUN interface
-and exchanges raw IPv4 and IPv6 packets with the server over its own TCP connection.
+in one shared overlay subnet and exchanges raw IPv4 and IPv6 packets with the server
+over its own TCP connection. The server uses one TUN as an IPv4/IPv6 exit node and
+routes client-to-client packets in .NET.
 
 Current architecture, deployment flow, and IPv4/IPv6 routing diagrams are in
 [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -26,17 +28,19 @@ From this directory:
 dotnet build VPNSample.slnx
 ```
 
-Move through the tagged demo stages from any checked-out stage:
+This commit is the third demo stage, `stage-03-shared-overlay-exit-node`.
+Move through the ordered stages from a clean worktree with:
 
 ```bash
 ./scripts/checkout_next_tag.sh
 ./scripts/checkout_prev_tag.sh
 ```
 
-Both scripts refuse to replace uncommitted work. This commit is
-`stage-02-extensible-pipeline`.
+Both scripts fetch the stage tags when necessary, check out the adjacent stage
+in detached HEAD mode, and refuse to replace a worktree with uncommitted files.
+Their implementation is available from the first stage onward.
 
-The automation layout is documented in [scripts/README.md](scripts/README.md).
+See [scripts/README.md](scripts/README.md) for the automation layout.
 
 ## Automated DigitalOcean flow
 
@@ -71,6 +75,22 @@ Always remove the temporary droplet when finished:
 This also removes the generated key from DigitalOcean and deletes the local
 `.vpn-ssh-key` and `.vpn-ssh-key.pub` files.
 
+### Three-node mesh E2E
+
+To reproduce the server plus two-client test in three DigitalOcean regions:
+
+```bash
+./scripts/e2e-three-node.sh
+```
+
+The script creates a VPN server in Amsterdam, an nginx client in Frankfurt,
+and a requester client in New York. It verifies bidirectional IPv4 and IPv6
+ping, internet reachability through the exit node, fetches nginx over both
+tunnel address families, checks nginx's access log for the requester's overlay
+addresses, and deletes all temporary resources on exit. The regions and droplet
+size can be overridden with `SERVER_REGION`, `CLIENT_A_REGION`,
+`CLIENT_B_REGION`, and `DO_SIZE`.
+
 ## Run the server
 
 First enable IPv4 and IPv6 forwarding. Replace `eth0` with the server's internet
@@ -79,8 +99,8 @@ interface:
 ```bash
 sudo sysctl -w net.ipv4.ip_forward=1
 sudo sysctl -w net.ipv6.conf.all.forwarding=1
-sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/16 -o eth0 -j MASQUERADE
-sudo ip6tables -t nat -A POSTROUTING -s fd42:8::/48 -o eth0 -j MASQUERADE
+sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+sudo ip6tables -t nat -A POSTROUTING -s fd42:8::/64 -o eth0 -j MASQUERADE
 sudo dotnet run --project Server -- 4433
 ```
 
@@ -160,9 +180,11 @@ additional capture on the server's public interface. Hex output and PCAP files
 contain complete payloads and may expose sensitive data or consume substantial
 storage, so enable them only while diagnosing traffic.
 
-The next client uses `10.8.1.2`, `10.8.1.1`, `fd42:8:1::2`, and
-`fd42:8:1::1`. The server supports client numbers 0 through 255 and reuses a
-number after that client disconnects.
+All clients are placed in the same overlay subnets. Client zero receives
+`10.8.0.2` and `fd42:8::2`, client one receives `10.8.0.3` and `fd42:8::3`,
+and both immediately get connected routes to `10.8.0.0/24` and `fd42:8::/64`.
+The server owns `.1`/`::1`, supports 253 simultaneous clients, and reuses an
+address after its client disconnects.
 
 To send all client traffic through it, first preserve a direct route to the VPN
 server (substitute the values from `ip route`), then replace the default route:

@@ -7,6 +7,7 @@ The executable files in this directory are intentionally thin workflows:
 | `create-droplet.sh` | Create or delete one state-file-owned DigitalOcean droplet |
 | `deploy-server.sh` | Publish and deploy the VPN server to that droplet |
 | `run-vpn.sh` | Run the local client and temporarily manage local routes |
+| `e2e-three-node.sh` | Orchestrate the disposable three-region integration test |
 | `checkout_next_tag.sh` | Move to the next tagged demo stage |
 | `checkout_prev_tag.sh` | Move to the previous tagged demo stage |
 
@@ -34,4 +35,8 @@ This always runs the shared-module smoke tests and checks Bash syntax, CLI help
 paths, and patch whitespace. It also runs ShellCheck when that executable is
 installed.
 
-The three-node integration entrypoint is added with the shared-overlay stage.
+The full disposable integration test is:
+
+```bash
+./scripts/e2e-three-node.sh
+```

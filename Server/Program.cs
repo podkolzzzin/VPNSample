@@ -20,11 +20,25 @@ var listener = new TcpListener(IPAddress.Any, port);
 listener.Start();
 var clientSlots = new bool[network.ClientCapacity];
 
-Console.WriteLine($"Listening on {listener.LocalEndpoint} with tunnel profile '{profileName}'");
+await using var exitNode = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
+    Name: network.ServerInterfaceName,
+    Ipv4Address: $"{network.ServerIpv4}/{network.Ipv4InterfacePrefixLength}",
+    Ipv6Address: $"{network.ServerIpv6}/{network.Ipv6InterfacePrefixLength}"));
+var router = new TunnelPacketRouter(exitNode, network);
+Task exitNodeRouting = router.RouteExitNodePacketsAsync();
+
+Console.WriteLine(
+    $"Listening on {listener.LocalEndpoint} with tunnel profile '{profileName}', " +
+    $"overlay {network.Ipv4Network} / {network.Ipv6Network}");
 
 while (true)
 {
-    TcpClient tcpClient = await listener.AcceptTcpClientAsync();
+    Task<TcpClient> accept = listener.AcceptTcpClientAsync();
+    Task completed = await Task.WhenAny(accept, exitNodeRouting);
+    if (completed == exitNodeRouting)
+        await exitNodeRouting;
+
+    TcpClient tcpClient = await accept;
     int clientNumber;
 
     lock (clientSlots)
@@ -52,19 +66,16 @@ async Task HandleClientAsync(TcpClient tcpClient, int clientNumber)
         {
             NetworkStream transport = tcpClient.GetStream();
             TunnelAddresses addresses = network.GetAddresses(clientNumber);
-
-            await using var tun = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
-                Name: network.GetServerInterfaceName(clientNumber),
-                Ipv4Address: $"{addresses.ServerIpv4}/{network.Ipv4InterfacePrefixLength}",
-                Ipv4Peer: addresses.ClientIpv4,
-                Ipv6Address: $"{addresses.ServerIpv6}/{network.Ipv6InterfacePrefixLength}"));
+            await using RoutedPacketEndpoint peer = router.RegisterPeer(addresses);
 
             await transport.WriteAsync(new[] { checked((byte)clientNumber) });
-            Console.WriteLine($"Client {clientNumber} connected: {tcpClient.Client.RemoteEndPoint}");
+            Console.WriteLine(
+                $"Client {clientNumber} connected: {tcpClient.Client.RemoteEndPoint}, " +
+                $"{addresses.ClientIpv4}, {addresses.ClientIpv6}");
             await using var pipeline = TunnelProfileFactory.Create(
                 profileName,
                 $"server client={clientNumber}");
-            await pipeline.RunAsync(tun, transport);
+            await pipeline.RunAsync(peer, transport);
         }
         catch (Exception error)
         {

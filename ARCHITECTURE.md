@@ -9,7 +9,7 @@ flowchart LR
     subgraph Laptop[Клієнтський Linux]
         App[Firefox та інші програми]
         Route[Linux routing]
-        CTun[svpn0<br/>10.8.N.2 / fd42:8:N::2]
+        CTun[svpn0<br/>10.8.0.X/24 / fd42:8::X/64]
         CLinux[LinuxTunDevice]
         CProtocol[TunnelPipeline<br/>baseline profile]
         CTcp[NetworkStream]
@@ -25,14 +25,16 @@ flowchart LR
 
     subgraph Droplet[DigitalOcean Ubuntu droplet]
         STcp[NetworkStream]
-        SProtocol[TunnelPipeline<br/>baseline profile]
+        SProtocol[TunnelPipeline per connection<br/>baseline profile]
+        Router[TunnelPacketRouter<br/>overlay IP → connection]
         SLinux[LinuxTunDevice]
-        STun[svpnN<br/>10.8.N.1 / fd42:8:N::1]
+        STun[one svpn0<br/>10.8.0.1/24 / fd42:8::1/64]
         Forward[Linux IP forwarding]
         Nat[NAT44 / NAT66]
 
         STcp <-->|кадри тунелю| SProtocol
-        SProtocol <-->|IPacketEndpoint| SLinux
+        SProtocol <-->|RoutedPacketEndpoint| Router
+        Router <-->|exit-node packets| SLinux
         SLinux <--> STun
         STun <--> Forward
         Forward <--> Nat
@@ -41,9 +43,12 @@ flowchart LR
     Nat <--> Internet[Інтернет IPv4 та IPv6]
 ```
 
-Кожен клієнт має окреме TCP-з'єднання і окремий серверний TUN `svpnN`. Сервер
-передає номер `N` одним байтом перед першим кадром. З цього номера обидві сторони
-утворюють IPv4 та IPv6 адреси. TCP не шифрується і не автентифікується.
+Кожен клієнт має окреме TCP-з'єднання, але сервер має лише один TUN `svpn0`.
+Сервер передає номер `N` одним байтом перед першим кадром, а клієнт отримує host
+`N + 2` у спільних мережах `10.8.0.0/24` і `fd42:8::/64`. `TunnelPacketRouter`
+пересилає overlay-пакети безпосередньо у connection адресата, а internet traffic
+передає у серверний TUN для Linux forwarding і NAT. TCP поки не шифрується і не
+автентифікується.
 
 ## Розділення рівнів
 
@@ -67,17 +72,19 @@ flowchart TB
 
 | Рівень | Відповідальність | Не знає про |
 |---|---|---|
-| `VpnSample.Protocol` | Межа `IPacketEndpoint`, pipeline стадій, wire codec, handshake і двонапрямне копіювання | `/dev/net/tun`, маршрути, DigitalOcean |
+| `VpnSample.Protocol` | Межа `IPacketEndpoint`, pipeline стадій, wire codec, handshake, packet router і таблиця overlay IP → connection | `/dev/net/tun`, системні маршрути, DigitalOcean |
 | `VpnSample.Os.Linux` | Створення TUN, адреси інтерфейсу, незалежні потоки читання/запису | TCP, сервер, формат розгортання |
 | `VpnSample.Client` | TCP-підключення, композиція протоколу з Linux endpoint | Налаштування cloud-сервера |
-| `VpnSample.Server` | TCP listener, приймання клієнта, композиція компонентів | Клієнтські default routes |
+| `VpnSample.Server` | Один exit-node TUN, TCP listener, реєстрація peers і композиція router/pipeline | Клієнтські default routes |
 | `scripts/` | Життєвий цикл droplet, deployment, системні маршрути та перевірки | Внутрішній фреймінг пакетів |
 
 Таким чином, OS-level VPN відділений від protocol-level VPN на межі `IPacketEndpoint`. Протокол працює зі `Stream` і не викликає Linux API напряму.
 
 ## Pipeline протоколу
 
-`TunnelPipeline` перетворює кожен пакет TUN на `TunnelFrame`. Outbound-стадії
+`TunnelPipeline` перетворює кожен пакет `IPacketEndpoint` на `TunnelFrame`. На
+клієнті endpoint — TUN, а на сервері для кожного connection це channel-backed
+`RoutedPacketEndpoint`. Outbound-стадії
 виконуються в порядку реєстрації, а inbound-стадії — у зворотному порядку. Це
 дозволяє майбутній стадії кодувати кадр на клієнті й симетрично декодувати його
 на сервері. Поточний `baseline`-профіль містить лише tracing і pass-through.
@@ -140,9 +147,10 @@ sequenceDiagram
     Run->>Run: Додати прямий route до VPN server
     Run->>Client: Запустити з sudo
     Client->>Host: TCP connect
+    Host->>Host: Створити один exit-node svpn0 під час старту
     Host-->>Client: Номер клієнта N
-    Host->>Host: Створити svpnN
-    Client->>Client: Створити svpn0 з адресами для N
+    Host->>Host: Зареєструвати IP клієнта у TunnelPacketRouter
+    Client->>Client: Створити svpn0 з host N+2 у спільному subnet
     Client->>Host: Handshake version + baseline profile
     Host-->>Client: Handshake version + baseline profile
     Client->>Host: Запустити tunnel pumps
@@ -165,7 +173,8 @@ flowchart LR
     ClientTun --> Frame[TunnelFrame envelope + IP packet]
     Frame --> TCP[TCP 4433]
     TCP --> Unframe[Відновлений IP packet]
-    Unframe --> ServerTun[svpnN]
+    Unframe --> Router[TunnelPacketRouter]
+    Router --> ServerTun[shared svpn0]
     ServerTun --> Forward[IP forwarding]
     Forward --> Choice{Версія IP}
     Choice -->|IPv4| NAT44[iptables MASQUERADE]
@@ -176,12 +185,23 @@ flowchart LR
 
 Відповідь проходить той самий шлях у зворотному напрямку. Тому сайт має бачити публічні IPv4 та IPv6 droplet, а не адреси локального провайдера.
 
+Для client-to-client пакета router знаходить connection за destination IP і
+пересилає пакет безпосередньо, не віддаючи його Linux TUN:
+
+```mermaid
+flowchart LR
+    A[Client A<br/>10.8.0.2] --> RA[Routed endpoint A]
+    RA --> Router[TunnelPacketRouter]
+    Router --> RB[Routed endpoint B]
+    RB --> B[Client B<br/>10.8.0.3]
+```
+
 ## Адреси та маршрути
 
 | Призначення | Клієнт | Сервер |
 |---|---|---|
-| Tunnel IPv4 | `10.8.N.2/32`, peer `10.8.N.1` | `10.8.N.1/32`, peer `10.8.N.2` |
-| Tunnel IPv6 | `fd42:8:N::2/64` | `fd42:8:N::1/64` |
+| Tunnel IPv4 | `10.8.0.X/24`, connected route `10.8.0.0/24` | `10.8.0.1/24` на одному `svpn0` |
+| Tunnel IPv6 | `fd42:8::X/64`, connected route `fd42:8::/64` | `fd42:8::1/64` на одному `svpn0` |
 | Default IPv4 | Перемикається на `svpn0` | Forward + NAT44 у зовнішню мережу |
 | Default IPv6 | Додається через `svpn0` з metric `50` | Forward + NAT66 у зовнішню мережу |
 | VPN transport | Прямий route до public IPv4 droplet | TCP listener на `0.0.0.0:4433` |
@@ -213,7 +233,7 @@ sequenceDiagram
 
 ## Поточні обмеження
 
-- Сервер має 256 номерів клієнтів і повторно використовує номер після відключення.
+- Сервер має 253 адреси клієнтів і повторно використовує адресу після відключення.
 - TCP-трафік тунелю не шифрується і не автентифікується.
 - Транспорт працює поверх TCP, тому можливий ефект TCP-over-TCP під час втрат пакетів.
 - IPv6 назовні використовує NAT66, а не делегований клієнту глобальний IPv6 prefix.

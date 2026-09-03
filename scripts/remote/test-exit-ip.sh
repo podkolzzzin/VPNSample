@@ -107,6 +107,9 @@ capture_external_ips before
 print_external_ips before
 
 vpn_routes_capture "$server_ipv4"
+read -r server_tunnel_v4 server_tunnel_v6 \
+  < <("$dotnet_bin" "$client_dll" --print-server-addresses)
+
 log "Connecting the probe to $server_ipv4:$vpn_port over plain TCP..."
 "$dotnet_bin" "$client_dll" "$server_ipv4" "$vpn_port" >"$client_log" 2>&1 &
 client_pid=$!
@@ -119,13 +122,6 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 
-server_tunnel_v4=$(ip -o -4 address show dev svpn0 \
-  | awk '{ for (i = 1; i <= NF; i++) if ($i == "peer") { split($(i + 1), a, "/"); print a[1]; exit } }')
-client_tunnel_v6=$(ip -o -6 address show dev svpn0 scope global \
-  | awk '{ split($4, a, "/"); print a[1]; exit }')
-[[ -n $server_tunnel_v4 ]] || fail "Could not read the IPv4 tunnel peer."
-[[ $client_tunnel_v6 == *::2 ]] || fail "Could not read the IPv6 client address."
-server_tunnel_v6=${client_tunnel_v6%2}1
 ping -c 1 -W 3 "$server_tunnel_v4" >/dev/null
 ping -6 -c 1 -W 3 "$server_tunnel_v6" >/dev/null
 routes_changed=true
