@@ -16,6 +16,8 @@ VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
 VPN_PROFILE=${VPN_PROFILE:-baseline}
+VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-}
+VPN_TLS_PINNED_CERTIFICATE=${VPN_TLS_PINNED_CERTIFICATE:-}
 peer_only=false
 
 usage() {
@@ -38,6 +40,8 @@ Environment:
   VPN_TRACE_HEX      Set to 1 to add a multiline hexadecimal dump
   VPN_TRACE_PCAP     Base path for a Wireshark-compatible capture
   VPN_PROFILE        Tunnel pipeline profile (default: baseline)
+  VPN_TLS_SERVER_NAME  HTTPS SNI/Host name (state file default: vpn.twocubes.io)
+  VPN_TLS_PINNED_CERTIFICATE  Optional pinned server certificate
 EOF
 }
 
@@ -54,7 +58,8 @@ need_all dotnet ip ping
 [[ -f $CLIENT_PROJECT ]] || fail "Client project not found: $CLIENT_PROJECT"
 load_state "$STATE_FILE"
 : "${DROPLET_IP:?DROPLET_IP is missing from $STATE_FILE}"
-VPN_PORT=${VPN_PORT:-4433}
+VPN_PORT=${VPN_PORT:-443}
+VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
 [[ $VPN_ROUTE_METRIC =~ ^[0-9]+$ ]] && ((VPN_ROUTE_METRIC >= 1 && VPN_ROUTE_METRIC <= 4294967295)) \
   || fail "VPN_ROUTE_METRIC must be an integer from 1 to 4294967295."
 validate_port "$VPN_PORT"
@@ -79,6 +84,8 @@ if ((EUID != 0)); then
     "VPN_TRACE_HEX=$VPN_TRACE_HEX" \
     "VPN_TRACE_PCAP=$VPN_TRACE_PCAP" \
     "VPN_PROFILE=$VPN_PROFILE" \
+    "VPN_TLS_SERVER_NAME=$VPN_TLS_SERVER_NAME" \
+    "VPN_TLS_PINNED_CERTIFICATE=$VPN_TLS_PINNED_CERTIFICATE" \
     "$0" "${sudo_args[@]}"
 fi
 
@@ -115,8 +122,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-log "Connecting to $DROPLET_IP:$VPN_PORT using profile '$VPN_PROFILE'..."
-env VPN_PROFILE="$VPN_PROFILE" \
+log "Connecting to https://$VPN_TLS_SERVER_NAME:$VPN_PORT/vpn using profile '$VPN_PROFILE'..."
+env \
+  "VPN_TLS_SERVER_NAME=$VPN_TLS_SERVER_NAME" \
+  "VPN_TLS_PINNED_CERTIFICATE=$VPN_TLS_PINNED_CERTIFICATE" \
   "$dotnet_bin" "$CLIENT_DLL" "$DROPLET_IP" "$VPN_PORT" &
 client_pid=$!
 

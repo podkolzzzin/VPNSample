@@ -72,7 +72,9 @@ trap cleanup EXIT INT TERM
 log "Deploying the current VPN server build to $SERVER_IPV4..."
 VPN_STATE_FILE=$SERVER_STATE "$DEPLOY_SERVER"
 load_state "$SERVER_STATE"
-SERVER_PORT=${VPN_PORT:-4433}
+SERVER_PORT=${VPN_PORT:-443}
+SERVER_TLS_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
+SERVER_TLS_CERTIFICATE=${VPN_TLS_PINNED_CERTIFICATE:-}
 
 log "Publishing the VPN client..."
 dotnet publish "$CLIENT_PROJECT" -c Release --no-self-contained -o "$publish_dir"
@@ -102,12 +104,18 @@ scp "${SSH_OPTIONS[@]}" "$REMOTE_TEST" "$remote:$remote_dir/test-exit-ip.sh"
 scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/lib/common.sh" "$SCRIPT_DIR/lib/routes.sh" \
   "$remote:$remote_dir/lib/"
 
+remote_certificate=
+if [[ -n $SERVER_TLS_CERTIFICATE ]]; then
+  remote_certificate=$remote_dir/tls.crt
+  scp "${SSH_OPTIONS[@]}" "$SERVER_TLS_CERTIFICATE" "$remote:$remote_certificate"
+fi
+
 remote_status=$remote_dir/result.status
 remote_log=$remote_dir/result.log
 remote_dotnet=$remote_dir/dotnet/dotnet
 remote_client=$remote_dir/app/Client.dll
 ssh "${SSH_OPTIONS[@]}" "$remote" \
-  "chmod +x '$remote_dir/test-exit-ip.sh'; rm -f '$remote_status' '$remote_log'; nohup '$remote_dir/test-exit-ip.sh' '$remote_status' '$SERVER_IPV4' '$SERVER_IPV6' '$SERVER_PORT' '$remote_dotnet' '$remote_client' >'$remote_log' 2>&1 </dev/null &"
+  "chmod +x '$remote_dir/test-exit-ip.sh'; rm -f '$remote_status' '$remote_log'; nohup '$remote_dir/test-exit-ip.sh' '$remote_status' '$SERVER_IPV4' '$SERVER_IPV6' '$SERVER_PORT' '$remote_dotnet' '$remote_client' '$SERVER_TLS_NAME' '$remote_certificate' >'$remote_log' 2>&1 </dev/null &"
 
 log "The detached test may interrupt SSH while replacing its default route."
 test_finished=false

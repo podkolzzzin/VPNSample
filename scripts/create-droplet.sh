@@ -72,6 +72,7 @@ if [[ $delete == true ]]; then
   load_state "$STATE_FILE"
   [[ -n ${DROPLET_ID:-} ]] || fail "DROPLET_ID is missing from $STATE_FILE"
   MANAGED_SSH_KEY=${MANAGED_SSH_KEY:-false}
+  MANAGED_TLS_CERTIFICATE=${MANAGED_TLS_CERTIFICATE:-false}
 
   do_delete_droplet "$DROPLET_ID" "${DROPLET_NAME:-unknown}" \
     || fail "Droplet deletion was not confirmed; keeping $STATE_FILE for recovery."
@@ -83,6 +84,11 @@ if [[ $delete == true ]]; then
       || fail "SSH key deletion was not confirmed; keeping local key and $STATE_FILE."
     rm -f -- "$SSH_KEY_PATH" "${SSH_KEY_PATH}.pub"
     log "Removed local temporary SSH key files."
+  fi
+
+  if [[ $MANAGED_TLS_CERTIFICATE == true && -n ${VPN_TLS_PINNED_CERTIFICATE:-} ]]; then
+    rm -f -- "$VPN_TLS_PINNED_CERTIFICATE"
+    log "Removed local temporary TLS certificate."
   fi
 
   rm -f -- "$STATE_FILE"
@@ -172,7 +178,7 @@ umask 077
   printf 'SSH_KEY_PATH=%q\n' "$ssh_key_path"
   printf 'MANAGED_SSH_KEY=%q\n' "$managed_ssh_key"
   printf 'DO_SSH_KEY_NAME=%q\n' "$ssh_key_name"
-  printf 'VPN_PORT=%q\n' "4433"
+  printf 'VPN_PORT=%q\n' "443"
 } >"$STATE_FILE"
 
 trap - EXIT

@@ -11,6 +11,8 @@ install_client() {
     /opt/vpnsample-client "$install_nginx" false <"$REMOTE_CLIENT_SETUP"
   scp "${SSH_OPTIONS[@]}" -r "$publish_dir/." \
     "root@$ip:/opt/vpnsample-client/app/"
+  scp "${SSH_OPTIONS[@]}" "$tls_pinned_certificate" \
+    "root@$ip:/opt/vpnsample-client/tls.crt"
 }
 
 start_vpn_client() {
@@ -19,7 +21,7 @@ start_vpn_client() {
   local server_ip=$3
   ssh_options_for "$key" "$work_dir/known_hosts"
   ssh "${SSH_OPTIONS[@]}" "root@$ip" \
-    "nohup env VPN_PROFILE='$VPN_PROFILE' /opt/vpnsample-client/dotnet/dotnet /opt/vpnsample-client/app/Client.dll '$server_ip' '$vpn_port' >/opt/vpnsample-client/client.log 2>&1 </dev/null & echo \$! >/opt/vpnsample-client/client.pid"
+    "nohup env VPN_PROFILE='$VPN_PROFILE' VPN_TLS_SERVER_NAME='$tls_server_name' VPN_TLS_PINNED_CERTIFICATE=/opt/vpnsample-client/tls.crt /opt/vpnsample-client/dotnet/dotnet /opt/vpnsample-client/app/Client.dll '$server_ip' '$vpn_port' >/opt/vpnsample-client/client.log 2>&1 </dev/null & echo \$! >/opt/vpnsample-client/client.pid"
 }
 
 wait_for_tunnel() {
@@ -49,6 +51,19 @@ wait_for_tunnel() {
   ssh "${SSH_OPTIONS[@]}" "root@$ip" \
     'cat /opt/vpnsample-client/client.log' || true
   fail "VPN client did not remain connected on $ip."
+}
+
+check_https_transport() {
+  local ip=$1
+  local key=$2
+  local expected="HTTPS transport: https://$tls_server_name:$vpn_port/vpn"
+  ssh_options_for "$key" "$work_dir/known_hosts"
+  if ! ssh "${SSH_OPTIONS[@]}" "root@$ip" \
+    "grep -Fqx '$expected' /opt/vpnsample-client/client.log"; then
+    ssh "${SSH_OPTIONS[@]}" "root@$ip" \
+      'cat /opt/vpnsample-client/client.log' || true
+    fail "Client on $ip did not confirm the expected HTTPS transport."
+  fi
 }
 
 tunnel_address() {

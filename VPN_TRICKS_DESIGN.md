@@ -16,6 +16,8 @@ The no-tricks foundation is implemented:
 - `IWireCodec` separates stream encoding from frame transformations.
 - `LengthPrefixedCodec` implements the baseline TCP wire format.
 - `TunnelHandshake` rejects protocol-version or profile mismatches.
+- `HttpsTunnelTransport` wraps the wire stream in TLS 1.2/1.3 and performs a
+  valid HTTP/1.1 Upgrade on `/vpn` before the VPN handshake.
 - `TunnelProfileFactory.Create` selects a named profile in one place; its
   `baseline` case composes tracing and pass-through stages.
 
@@ -34,8 +36,8 @@ Tunnel-frame pipeline    fragmentation, padding, aggregation
  v
 Wire codec               plain framing or HTTP-like encoding
  |
- v
-TCP transport
+v
+HTTPS transport (TLS + HTTP Upgrade on TCP/443)
 ```
 
 ## Tunnel stages
@@ -85,7 +87,8 @@ Each new demonstration becomes one class plus one registration line.
 | Packet delay, dropping, or reordering | `ITunnelStage` |
 | Tunnel-frame splitting and reassembly | `ITunnelStage` with packet IDs and fragment indexes |
 | Padding or aggregation | `ITunnelStage` |
-| HTTP-like masking | `IWireCodec` or a transport decorator |
+| HTTPS wrapping | `HttpsTunnelTransport` (implemented) |
+| Alternative HTTP-like masking | `IWireCodec` or a transport decorator |
 | TCP versus UDP transport | `ITunnelTransport` Strategy |
 | Split tunneling | `IRoutingPolicy`, outside the protocol pipeline |
 

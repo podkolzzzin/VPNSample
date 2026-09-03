@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
 
-DEMO_STAGE_TAGS=(
-  stage-01-basic-tunnel
-  stage-02-extensible-pipeline
-  stage-03-shared-overlay-exit-node
-  stage-04-https-transport
-)
-
 checkout_adjacent_tag() {
   local direction=$1
   local repo_root
@@ -21,9 +14,13 @@ checkout_adjacent_tag() {
     || fail "The worktree has uncommitted changes; commit or stash them first."
 
   git -C "$repo_root" fetch --force --tags origin
+  mapfile -t demo_stage_tags < <(
+    git -C "$repo_root" tag --list 'stage-[0-9][0-9]-*' --sort=version:refname
+  )
+  ((${#demo_stage_tags[@]} > 0)) || fail "No demo stage tags were found."
   head=$(git -C "$repo_root" rev-parse HEAD)
-  for index in "${!DEMO_STAGE_TAGS[@]}"; do
-    if [[ $(git -C "$repo_root" rev-parse "${DEMO_STAGE_TAGS[index]}^{commit}") == "$head" ]]; then
+  for index in "${!demo_stage_tags[@]}"; do
+    if [[ $(git -C "$repo_root" rev-parse "${demo_stage_tags[index]}^{commit}") == "$head" ]]; then
       current_index=$index
       break
     fi
@@ -32,11 +29,11 @@ checkout_adjacent_tag() {
     || fail "HEAD is not exactly on a demo stage tag. Check out stage-01-basic-tunnel first."
 
   target_index=$((current_index + direction))
-  if ((target_index < 0 || target_index >= ${#DEMO_STAGE_TAGS[@]})); then
+  if ((target_index < 0 || target_index >= ${#demo_stage_tags[@]})); then
     log "Already at the $([[ $direction -lt 0 ]] && printf first || printf last) demo stage."
     return
   fi
 
-  git -C "$repo_root" switch --detach "${DEMO_STAGE_TAGS[target_index]}"
-  log "Now at ${DEMO_STAGE_TAGS[target_index]}."
+  git -C "$repo_root" switch --detach "${demo_stage_tags[target_index]}"
+  log "Now at ${demo_stage_tags[target_index]}."
 }

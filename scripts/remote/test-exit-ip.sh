@@ -14,6 +14,8 @@ server_ipv6=$3
 vpn_port=$4
 dotnet_bin=$5
 client_dll=$6
+tls_server_name=$7
+pinned_certificate=${8:-}
 route_metric=50
 client_log=${status_file%/*}/vpn-client.log
 client_pid=
@@ -110,8 +112,10 @@ vpn_routes_capture "$server_ipv4"
 read -r server_tunnel_v4 server_tunnel_v6 \
   < <("$dotnet_bin" "$client_dll" --print-server-addresses)
 
-log "Connecting the probe to $server_ipv4:$vpn_port over plain TCP..."
-"$dotnet_bin" "$client_dll" "$server_ipv4" "$vpn_port" >"$client_log" 2>&1 &
+log "Connecting the probe to https://$tls_server_name:$vpn_port/vpn..."
+env VPN_TLS_SERVER_NAME="$tls_server_name" \
+  VPN_TLS_PINNED_CERTIFICATE="$pinned_certificate" \
+  "$dotnet_bin" "$client_dll" "$server_ipv4" "$vpn_port" >"$client_log" 2>&1 &
 client_pid=$!
 
 for attempt in $(seq 1 30); do

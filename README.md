@@ -8,17 +8,18 @@ routes client-to-client packets in .NET.
 Current architecture, deployment flow, and IPv4/IPv6 routing diagrams are in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-This is not a secure VPN. The TCP connection is unencrypted and unauthenticated.
-Anyone who can reach the connection can read or change its traffic. The project is
-only intended to demonstrate TUN devices, packet framing, routing, and forwarding.
+The wire transport uses TLS 1.2/1.3 plus an HTTP/1.1 Upgrade at
+`https://vpn.twocubes.io/vpn`. The automated demo pins a temporary certificate,
+but clients do not authenticate themselves to the server yet. This remains a
+learning project rather than a production VPN.
 
 ## Requirements
 
 - Linux on both machines
 - .NET 10 SDK
-- `iproute2`; `iptables` for internet forwarding
+- `iproute2`; `iptables` for internet forwarding; `openssl` for demo certificates
 - root privileges for `/dev/net/tun` and network configuration
-- TCP port 4433 allowed through the server firewall
+- TCP port 443 allowed through the server firewall
 
 ## Build
 
@@ -28,24 +29,24 @@ From this directory:
 dotnet build VPNSample.slnx
 ```
 
-This commit is the third demo stage, `stage-03-shared-overlay-exit-node`.
-Move through the ordered stages from a clean worktree with:
+Move through the tagged demo stages from any checked-out stage:
 
 ```bash
 ./scripts/checkout_next_tag.sh
 ./scripts/checkout_prev_tag.sh
 ```
 
-Both scripts fetch the stage tags when necessary, check out the adjacent stage
-in detached HEAD mode, and refuse to replace a worktree with uncommitted files.
-Their implementation is available from the first stage onward.
-
-See [scripts/README.md](scripts/README.md) for the automation layout.
+Both scripts fetch tags, refuse to replace uncommitted work, and switch in
+detached HEAD mode. Start explicitly with `git switch --detach
+stage-01-basic-tunnel` when HEAD is not already on a demo stage.
 
 ## Automated DigitalOcean flow
 
 The scripts require `doctl`, `ssh`, `scp`, `ssh-keygen`, and the .NET 10 SDK
 locally. Authenticate `doctl` first.
+
+The script layout and local validation commands are documented in
+[scripts/README.md](scripts/README.md).
 
 ```bash
 ./scripts/create-droplet.sh
@@ -58,7 +59,25 @@ public key in DigitalOcean, and records the temporary resources in
 `.vpn-droplet.env`. Use `--ssh-key-id` together with `--ssh-key` only when you
 explicitly want to supply an existing key. `deploy-server.sh` publishes the
 server, installs .NET 10 on the IPv6-enabled droplet, configures IPv4/IPv6
-forwarding and NAT, and starts `vpnsample.service`.
+forwarding and NAT, creates a seven-day certificate for `vpn.twocubes.io`, and
+starts `vpnsample.service`. The public certificate is recorded in the state file
+and pinned by `run-vpn.sh`; its private key exists only on the server.
+
+The temporary flow connects to the droplet IP while sending `vpn.twocubes.io`
+as TLS SNI and HTTP `Host`, so it does not require a DNS change. For a permanent
+deployment, point the `vpn.twocubes.io` A/AAAA records at the server, issue a
+publicly trusted certificate, and provide its PEM files to `deploy-server.sh`:
+
+```bash
+VPN_TLS_CERTIFICATE=/path/to/fullchain.pem \
+VPN_TLS_PRIVATE_KEY=/path/to/privkey.pem \
+./scripts/deploy-server.sh
+```
+
+This leaves the existing `twocubes.io` website untouched. On the wire the
+outer connection is real TLS on TCP/443; the tunnel frames and HTTP Upgrade are
+encrypted. A network observer can still see the destination IP and normally the
+TLS SNI, so the DNS record and server address should agree in a permanent setup.
 
 By default, `run-vpn.sh` replaces the local IPv4 and IPv6 default routes while the
 client is running and restores them on exit. Use `--peer-only` to create and test
@@ -85,7 +104,8 @@ To reproduce the server plus two-client test in three DigitalOcean regions:
 
 The script creates a VPN server in Amsterdam, an nginx client in Frankfurt,
 and a requester client in New York. It verifies bidirectional IPv4 and IPv6
-ping, internet reachability through the exit node, fetches nginx over both
+ping, confirms TLS plus HTTP Upgrade on both clients, checks internet
+reachability through the exit node, fetches nginx over both
 tunnel address families, checks nginx's access log for the requester's overlay
 addresses, and deletes all temporary resources on exit. The regions and droplet
 size can be overridden with `SERVER_REGION`, `CLIENT_A_REGION`,
@@ -101,7 +121,11 @@ sudo sysctl -w net.ipv4.ip_forward=1
 sudo sysctl -w net.ipv6.conf.all.forwarding=1
 sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
 sudo ip6tables -t nat -A POSTROUTING -s fd42:8::/64 -o eth0 -j MASQUERADE
-sudo dotnet run --project Server -- 4433
+sudo env \
+  VPN_TLS_SERVER_NAME=vpn.twocubes.io \
+  VPN_TLS_CERTIFICATE=/path/to/fullchain.pem \
+  VPN_TLS_PRIVATE_KEY=/path/to/privkey.pem \
+  dotnet run --project Server -- 443
 ```
 
 ## Run the client
@@ -109,7 +133,10 @@ sudo dotnet run --project Server -- 4433
 Connect using the server address:
 
 ```bash
-sudo dotnet run --project Client -- SERVER_IP 4433
+sudo env \
+  VPN_TLS_SERVER_NAME=vpn.twocubes.io \
+  VPN_TLS_PINNED_CERTIFICATE=/path/to/server.crt \
+  dotnet run --project Client -- SERVER_IP 443
 ```
 
 The server prints the assigned addresses. Client zero can test its peer with:
@@ -165,8 +192,12 @@ ssh root@SERVER_IP journalctl -fu vpnsample.service
 For direct `dotnet run` commands, preserve the setting across `sudo` explicitly:
 
 ```bash
-sudo env VPN_TRACE_PACKETS=1 dotnet run --project Server -- 4433
-sudo env VPN_TRACE_PACKETS=1 dotnet run --project Client -- SERVER_IP 4433
+sudo env VPN_TRACE_PACKETS=1 VPN_TLS_SERVER_NAME=vpn.twocubes.io \
+  VPN_TLS_CERTIFICATE=/path/to/fullchain.pem VPN_TLS_PRIVATE_KEY=/path/to/privkey.pem \
+  dotnet run --project Server -- 443
+sudo env VPN_TRACE_PACKETS=1 VPN_TLS_SERVER_NAME=vpn.twocubes.io \
+  VPN_TLS_PINNED_CERTIFICATE=/path/to/server.crt \
+  dotnet run --project Client -- SERVER_IP 443
 ```
 
 The core architecture currently provides only the no-tricks `baseline` profile.

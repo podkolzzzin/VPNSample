@@ -127,6 +127,10 @@ log "Deploying VPN server with profile '$VPN_PROFILE'..."
 VPN_STATE_FILE=$server_state VPN_PROFILE=$VPN_PROFILE \
   SSH_KNOWN_HOSTS_FILE=$work_dir/known_hosts "$DEPLOY_SERVER"
 vpn_port=$(state_value "$server_state" VPN_PORT)
+tls_server_name=$(state_value "$server_state" VPN_TLS_SERVER_NAME)
+tls_pinned_certificate=$(state_value "$server_state" VPN_TLS_PINNED_CERTIFICATE)
+[[ -f $tls_pinned_certificate ]] \
+  || fail "Pinned TLS certificate was not created: $tls_pinned_certificate"
 
 log "Publishing current VPN client..."
 dotnet publish "$PROJECT_ROOT/Client/Client.csproj" -c Release --no-self-contained \

@@ -5,7 +5,7 @@ namespace VpnSample.Protocol;
 
 static class TunnelHandshake
 {
-    const ushort ProtocolVersion = 2;
+    const ushort ProtocolVersion = 3;
     const int MaximumProfileNameLength = 64;
     static ReadOnlySpan<byte> Magic => "SVPN"u8;
 

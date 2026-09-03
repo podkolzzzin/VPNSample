@@ -50,3 +50,8 @@ validate_profile() {
   [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] \
     || fail "VPN_PROFILE must contain 1-64 lowercase letters, digits, or hyphens."
 }
+
+validate_dns_name() {
+  [[ $1 =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+    || fail "VPN_TLS_SERVER_NAME is not a valid DNS name."
+}

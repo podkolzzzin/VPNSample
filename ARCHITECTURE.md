@@ -12,7 +12,7 @@ flowchart LR
         CTun[svpn0<br/>10.8.0.X/24 / fd42:8::X/64]
         CLinux[LinuxTunDevice]
         CProtocol[TunnelPipeline<br/>baseline profile]
-        CTcp[NetworkStream]
+        CTcp[SslStream<br/>HTTPS Upgrade]
 
         App <--> Route
         Route <--> CTun
@@ -21,10 +21,10 @@ flowchart LR
         CProtocol <-->|кадри тунелю| CTcp
     end
 
-    CTcp <-->|TCP/4433| STcp
+    CTcp <-->|TLS over TCP/443| STcp
 
     subgraph Droplet[DigitalOcean Ubuntu droplet]
-        STcp[NetworkStream]
+        STcp[SslStream<br/>HTTPS Upgrade]
         SProtocol[TunnelPipeline per connection<br/>baseline profile]
         Router[TunnelPacketRouter<br/>overlay IP → connection]
         SLinux[LinuxTunDevice]
@@ -47,8 +47,12 @@ flowchart LR
 Сервер передає номер `N` одним байтом перед першим кадром, а клієнт отримує host
 `N + 2` у спільних мережах `10.8.0.0/24` і `fd42:8::/64`. `TunnelPacketRouter`
 пересилає overlay-пакети безпосередньо у connection адресата, а internet traffic
-передає у серверний TUN для Linux forwarding і NAT. TCP поки не шифрується і не
-автентифікується.
+передає у серверний TUN для Linux forwarding і NAT. Wire traffic шифрується TLS;
+сервер автентифікується сертифікатом, але client authentication ще немає.
+Тимчасова автоматизація підключається до IP droplet напряму, передає
+`vpn.twocubes.io` як SNI/Host і перевіряє exact certificate pin. Для постійного
+deployment DNS `vpn.twocubes.io` має вказувати на сервер, а сертифікат має бути
+виданий довіреним CA.
 
 ## Розділення рівнів
 
@@ -94,9 +98,9 @@ flowchart LR
     TunRead[TUN PacketReader] --> Frame[TunnelFrame]
     Frame --> Outbound[Outbound stages]
     Outbound --> Codec[LengthPrefixedCodec]
-    Codec --> TcpWrite[NetworkStream]
+    Codec --> TcpWrite[SslStream]
 
-    TcpRead[NetworkStream] --> Decode[LengthPrefixedCodec]
+    TcpRead[SslStream] --> Decode[LengthPrefixedCodec]
     Decode --> Inbound[Inbound stages, reverse order]
     Inbound --> TunWrite[TUN PacketWriter]
 ```
@@ -147,6 +151,9 @@ sequenceDiagram
     Run->>Run: Додати прямий route до VPN server
     Run->>Client: Запустити з sudo
     Client->>Host: TCP connect
+    Client->>Host: TLS 1.2/1.3, SNI vpn.twocubes.io, ALPN http/1.1
+    Client->>Host: GET /vpn + HTTP Upgrade
+    Host-->>Client: 101 Switching Protocols
     Host->>Host: Створити один exit-node svpn0 під час старту
     Host-->>Client: Номер клієнта N
     Host->>Host: Зареєструвати IP клієнта у TunnelPacketRouter
@@ -171,8 +178,8 @@ flowchart LR
     Browser[Firefox] --> CRoute[Маршрути клієнта]
     CRoute --> ClientTun[svpn0]
     ClientTun --> Frame[TunnelFrame envelope + IP packet]
-    Frame --> TCP[TCP 4433]
-    TCP --> Unframe[Відновлений IP packet]
+    Frame --> HTTPS[TLS + HTTP Upgrade<br/>TCP 443]
+    HTTPS --> Unframe[Відновлений IP packet]
     Unframe --> Router[TunnelPacketRouter]
     Router --> ServerTun[shared svpn0]
     ServerTun --> Forward[IP forwarding]
@@ -204,7 +211,7 @@ flowchart LR
 | Tunnel IPv6 | `fd42:8::X/64`, connected route `fd42:8::/64` | `fd42:8::1/64` на одному `svpn0` |
 | Default IPv4 | Перемикається на `svpn0` | Forward + NAT44 у зовнішню мережу |
 | Default IPv6 | Додається через `svpn0` з metric `50` | Forward + NAT66 у зовнішню мережу |
-| VPN transport | Прямий route до public IPv4 droplet | TCP listener на `0.0.0.0:4433` |
+| VPN transport | Прямий route до public IPv4 droplet, TLS SNI `vpn.twocubes.io` | HTTPS listener на `0.0.0.0:443` |
 
 Metric IPv6-маршруту можна змінити через `VPN_ROUTE_METRIC`. Скрипт перевіряє фактичний результат `ip route get` для обох сімейств адрес і завершується з помилкою, якщо маршрут оминає `svpn0`.
 
@@ -234,7 +241,7 @@ sequenceDiagram
 ## Поточні обмеження
 
 - Сервер має 253 адреси клієнтів і повторно використовує адресу після відключення.
-- TCP-трафік тунелю не шифрується і не автентифікується.
+- TLS автентифікує сервер, але клієнти поки не мають власних identities/certificates.
 - Транспорт працює поверх TCP, тому можливий ефект TCP-over-TCP під час втрат пакетів.
 - IPv6 назовні використовує NAT66, а не делегований клієнту глобальний IPv6 prefix.
 - Це навчальна реалізація, а не production VPN із керуванням користувачами, ротацією ключів та kill switch.

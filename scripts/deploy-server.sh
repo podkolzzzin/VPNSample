@@ -17,6 +17,10 @@ VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
 VPN_PROFILE=${VPN_PROFILE:-baseline}
+VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
+VPN_TLS_CERTIFICATE=${VPN_TLS_CERTIFICATE:-}
+VPN_TLS_PRIVATE_KEY=${VPN_TLS_PRIVATE_KEY:-}
+VPN_TLS_PINNED_CERTIFICATE=${VPN_TLS_PINNED_CERTIFICATE:-}
 
 usage() {
   cat <<'EOF'
@@ -27,7 +31,9 @@ recorded droplet, and start it as vpnsample.service.
 
 Environment: VPN_STATE_FILE, SSH_USER (default: root), VPN_TRACE_PACKETS,
 VPN_TRACE_HEX, VPN_TRACE_PCAP, VPN_PROFILE (default: baseline), and optional
-SSH_KNOWN_HOSTS_FILE.
+SSH_KNOWN_HOSTS_FILE. HTTPS uses VPN_TLS_SERVER_NAME (default:
+vpn.twocubes.io). Set both VPN_TLS_CERTIFICATE and VPN_TLS_PRIVATE_KEY to deploy
+an existing PEM certificate; otherwise a temporary pinned certificate is made.
 EOF
 }
 
@@ -39,13 +45,13 @@ while (($#)); do
   esac
 done
 
-need_all dotnet ssh scp
+need_all dotnet ssh scp openssl
 [[ -f $SERVER_PROJECT ]] || fail "Server project not found: $SERVER_PROJECT"
 [[ -f $REMOTE_SERVER_SETUP ]] || fail "Remote setup script not found: $REMOTE_SERVER_SETUP"
 load_state "$STATE_FILE"
 : "${DROPLET_IP:?DROPLET_IP is missing from $STATE_FILE}"
 : "${SSH_KEY_PATH:?SSH_KEY_PATH is missing from $STATE_FILE}"
-VPN_PORT=${VPN_PORT:-4433}
+VPN_PORT=${VPN_PORT:-443}
 [[ -f $SSH_KEY_PATH ]] || fail "SSH private key not found: $SSH_KEY_PATH"
 validate_port "$VPN_PORT"
 validate_boolean VPN_TRACE_PACKETS "$VPN_TRACE_PACKETS"
@@ -53,11 +59,35 @@ validate_boolean VPN_TRACE_HEX "$VPN_TRACE_HEX"
 [[ $VPN_TRACE_PCAP != *[[:space:]]* ]] \
   || fail "VPN_TRACE_PCAP must not contain whitespace."
 validate_profile "$VPN_PROFILE"
+validate_dns_name "$VPN_TLS_SERVER_NAME"
+[[ -z $VPN_TLS_CERTIFICATE && -z $VPN_TLS_PRIVATE_KEY \
+  || -n $VPN_TLS_CERTIFICATE && -n $VPN_TLS_PRIVATE_KEY ]] \
+  || fail "Set both VPN_TLS_CERTIFICATE and VPN_TLS_PRIVATE_KEY, or neither."
 
 ssh_options_for "$SSH_KEY_PATH" "$SSH_KNOWN_HOSTS_FILE"
 remote=$SSH_USER@$DROPLET_IP
 publish_dir=$(mktemp -d)
 trap 'rm -rf -- "$publish_dir"' EXIT
+
+managed_tls_certificate=false
+tls_certificate_source=$VPN_TLS_CERTIFICATE
+tls_private_key_source=$VPN_TLS_PRIVATE_KEY
+if [[ -z $tls_certificate_source ]]; then
+  managed_tls_certificate=true
+  tls_certificate_source=$publish_dir/tls.crt
+  tls_private_key_source=$publish_dir/tls.key
+  log "Generating a temporary pinned TLS certificate for $VPN_TLS_SERVER_NAME..."
+  openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 7 \
+    -subj "/CN=$VPN_TLS_SERVER_NAME" \
+    -addext "subjectAltName=DNS:$VPN_TLS_SERVER_NAME" \
+    -keyout "$tls_private_key_source" \
+    -out "$tls_certificate_source" >/dev/null 2>&1
+else
+  [[ -f $tls_certificate_source ]] \
+    || fail "TLS certificate not found: $tls_certificate_source"
+  [[ -f $tls_private_key_source ]] \
+    || fail "TLS private key not found: $tls_private_key_source"
+fi
 
 log "Publishing the .NET 10 server..."
 dotnet publish "$SERVER_PROJECT" -c Release --no-self-contained -o "$publish_dir/server"
@@ -72,18 +102,32 @@ wait_for_ssh "$DROPLET_IP" "$SSH_KEY_PATH" "$SSH_USER" 30 10 \
 
 log "Uploading server files..."
 ssh "${SSH_OPTIONS[@]}" "$remote" \
-  'rm -rf /opt/vpnsample/app && mkdir -p /opt/vpnsample/app'
+  'rm -rf /opt/vpnsample/app && mkdir -p /opt/vpnsample/app /etc/vpnsample'
 scp "${SSH_OPTIONS[@]}" -r "$publish_dir/server/." "$remote:/opt/vpnsample/app/"
+scp "${SSH_OPTIONS[@]}" "$tls_certificate_source" "$remote:/etc/vpnsample/tls.crt"
+scp "${SSH_OPTIONS[@]}" "$tls_private_key_source" "$remote:/etc/vpnsample/tls.key"
+ssh "${SSH_OPTIONS[@]}" "$remote" \
+  'chmod 644 /etc/vpnsample/tls.crt && chmod 600 /etc/vpnsample/tls.key'
 
 log "Installing .NET 10 and configuring forwarding, NAT, and systemd..."
 ssh "${SSH_OPTIONS[@]}" "$remote" bash -s -- \
   "$VPN_PORT" "$ipv4_network" "$ipv6_network" "$VPN_TRACE_PACKETS" \
-  "$VPN_TRACE_HEX" "${VPN_TRACE_PCAP:--}" "$VPN_PROFILE" \
+  "$VPN_TRACE_HEX" "${VPN_TRACE_PCAP:--}" "$VPN_PROFILE" "$VPN_TLS_SERVER_NAME" \
   <"$REMOTE_SERVER_SETUP"
 
 ssh "${SSH_OPTIONS[@]}" "$remote" systemctl is-active --quiet vpnsample.service \
   || fail "Server did not start. Inspect: ssh $remote journalctl -u vpnsample"
 
-log "VPN server is listening on $DROPLET_IP:$VPN_PORT"
+if [[ $managed_tls_certificate == true ]]; then
+  VPN_TLS_PINNED_CERTIFICATE=${STATE_FILE}.tls.crt
+  cp -- "$tls_certificate_source" "$VPN_TLS_PINNED_CERTIFICATE"
+fi
+{
+  printf 'VPN_TLS_SERVER_NAME=%q\n' "$VPN_TLS_SERVER_NAME"
+  printf 'VPN_TLS_PINNED_CERTIFICATE=%q\n' "$VPN_TLS_PINNED_CERTIFICATE"
+  printf 'MANAGED_TLS_CERTIFICATE=%q\n' "$managed_tls_certificate"
+} >>"$STATE_FILE"
+
+log "HTTPS tunnel is listening on $DROPLET_IP:$VPN_PORT as $VPN_TLS_SERVER_NAME"
 log "Next: $PROJECT_ROOT/scripts/run-vpn.sh"
 log "After testing: $PROJECT_ROOT/scripts/create-droplet.sh --delete"

@@ -5,7 +5,8 @@ namespace VpnSample.Protocol;
 
 public sealed class TunnelNetwork
 {
-    public int DefaultPort { get; } = 4433;
+    public int DefaultPort { get; } = 443;
+    public string DefaultTlsServerName { get; } = "vpn.twocubes.io";
     public int ClientCapacity { get; } = 253;
     public string ClientInterfaceName { get; } = "svpn0";
     public string ServerInterfaceName { get; } = "svpn0";

@@ -3,6 +3,10 @@
 # Assertions run after both E2E clients have established their tunnels.
 
 verify_three_node_topology() {
+  log "Confirming TLS and HTTP Upgrade on both clients..."
+  check_https_transport "$client_a_ip" "$client_a_key"
+  check_https_transport "$client_b_ip" "$client_b_key"
+
   client_a_tunnel_v4=$(tunnel_address 4 "$client_a_ip" "$client_a_key")
   client_a_tunnel_v6=$(tunnel_address 6 "$client_a_ip" "$client_a_key")
   client_b_tunnel_v4=$(tunnel_address 4 "$client_b_ip" "$client_b_key")
