@@ -2,10 +2,25 @@
 
 Use a **layered Decorator pipeline**, configured with the **Strategy pattern**.
 
-The existing `PacketTunnelProtocol` is the right place to make one initial
-refactor. It currently combines orchestration, framing, tracing, and transport
-writes in one class. Separate those concerns once, and subsequent tricks become
-plug-ins.
+The core architecture separates orchestration, framing, tracing, and transport
+encoding so subsequent tricks can be added as plug-ins.
+
+## Current implementation status
+
+The no-tricks foundation is implemented:
+
+- `TunnelPipeline` owns the bidirectional pumps.
+- `ITunnelStage` defines outbound and inbound decorators.
+- `TunnelPipelineBuilder` makes stage order explicit.
+- `TunnelFrame` carries packet and fragment metadata.
+- `IWireCodec` separates stream encoding from frame transformations.
+- `LengthPrefixedCodec` implements the baseline TCP wire format.
+- `TunnelHandshake` rejects protocol-version or profile mismatches.
+- `TunnelProfileFactory.Create` selects a named profile in one place; its
+  `baseline` case composes tracing and pass-through stages.
+
+Fragmentation, reordering, delays, masking, and routing policies remain planned;
+none of those tricks are enabled by the baseline profile.
 
 ```text
 TUN
@@ -50,7 +65,9 @@ public interface ITunnelStage
 The selected tricks can then be composed explicitly:
 
 ```csharp
-var pipeline = new TunnelPipelineBuilder()
+await using var pipeline = new TunnelPipelineBuilder(
+        "fragment-demo",
+        new LengthPrefixedCodec())
     .Use(new PacketTraceStage("client"))
     .Use(new FragmentStage(maxPayload: 400))
     .Use(new ReorderStage(windowSize: 3))
@@ -92,37 +109,38 @@ Example strategies could be `FullTunnelPolicy`, `PeerOnlyPolicy`, and
 ```text
 Protocol/
   TunnelPipeline.cs
+  TunnelPipelineBuilder.cs
   TunnelFrame.cs
+  ITunnelStage.cs
+  IWireCodec.cs
+  TunnelHandshake.cs
   Stages/
+    PacketTraceStage.cs
     PassThroughStage.cs
-    FragmentStage.cs
-    ReorderStage.cs
-    DelayStage.cs
+    # Future: FragmentStage.cs, ReorderStage.cs, DelayStage.cs
   Codecs/
     LengthPrefixedCodec.cs
-    HttpLikeCodec.cs
+    # Future: HttpLikeCodec.cs
   Profiles/
     TunnelProfileFactory.cs
 
 Os.Linux/
   Routing/
-    FullTunnelPolicy.cs
-    SelectedNetworksPolicy.cs
+    # Future: FullTunnelPolicy.cs, SelectedNetworksPolicy.cs
 ```
 
 ## Important protocol details
 
-1. Give every tunnel packet a packet ID before splitting, together with a
-   fragment index and fragment count. Otherwise splitting and reordering cannot
-   be reversed reliably.
-2. Add a small client/server handshake containing the protocol version and
-   selected profile. Currently both sides assume identical framing; mismatched
-   tricks would otherwise corrupt or hang the connection.
+1. Every tunnel packet receives a packet ID before the stage chain, together
+   with a fragment index and fragment count in its wire envelope. Future
+   splitting and reassembly stages should preserve these fields.
+2. The client/server handshake carries the protocol version and selected
+   profile. Mismatched profiles are rejected before frame exchange.
 3. Make stage order visible in the profile because stages may not commute. For
    example, fragmenting before reordering demonstrates reordered fragments,
    while reordering before fragmenting demonstrates reordered IP packets.
-4. Keep a pass-through profile so every experiment can be compared with the
-   current baseline.
+4. Keep the implemented pass-through profile so every experiment can be
+   compared with the current baseline.
 
 Splitting TCP `WriteAsync` calls is not meaningful packet splitting. TCP may
 merge or divide writes arbitrarily. Split explicit tunnel frames, or use UDP if
@@ -134,4 +152,3 @@ Use **Decorator/Chain of Responsibility** for the ordered tunnel stages, and
 use **Strategy** for codecs, transports, demonstration profiles, and routing
 policies. This keeps the pipeline readable during demonstrations and minimizes
 the changes needed for each new trick.
-:q

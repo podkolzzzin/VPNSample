@@ -11,7 +11,7 @@ flowchart LR
         Route[Linux routing]
         CTun[svpn0<br/>10.8.N.2 / fd42:8:N::2]
         CLinux[LinuxTunDevice]
-        CProtocol[PacketTunnelProtocol]
+        CProtocol[TunnelPipeline<br/>baseline profile]
         CTcp[NetworkStream]
 
         App <--> Route
@@ -25,7 +25,7 @@ flowchart LR
 
     subgraph Droplet[DigitalOcean Ubuntu droplet]
         STcp[NetworkStream]
-        SProtocol[PacketTunnelProtocol]
+        SProtocol[TunnelPipeline<br/>baseline profile]
         SLinux[LinuxTunDevice]
         STun[svpnN<br/>10.8.N.1 / fd42:8:N::1]
         Forward[Linux IP forwarding]
@@ -52,7 +52,7 @@ flowchart TB
     Client[VpnSample.Client<br/>composition root]
     Server[VpnSample.Server<br/>composition root]
     Linux[VpnSample.Os.Linux<br/>LinuxTunDevice]
-    Protocol[VpnSample.Protocol<br/>IPacketEndpoint + PacketTunnelProtocol]
+    Protocol[VpnSample.Protocol<br/>pipeline + stages + wire codec]
     Kernel[Linux kernel<br/>/dev/net/tun, ip, routes]
 
     Client --> Protocol
@@ -67,7 +67,7 @@ flowchart TB
 
 | Рівень | Відповідальність | Не знає про |
 |---|---|---|
-| `VpnSample.Protocol` | Межа `IPacketEndpoint`, фреймінг пакетів, двонапрямне копіювання | `/dev/net/tun`, маршрути, DigitalOcean |
+| `VpnSample.Protocol` | Межа `IPacketEndpoint`, pipeline стадій, wire codec, handshake і двонапрямне копіювання | `/dev/net/tun`, маршрути, DigitalOcean |
 | `VpnSample.Os.Linux` | Створення TUN, адреси інтерфейсу, незалежні потоки читання/запису | TCP, сервер, формат розгортання |
 | `VpnSample.Client` | TCP-підключення, композиція протоколу з Linux endpoint | Налаштування cloud-сервера |
 | `VpnSample.Server` | TCP listener, приймання клієнта, композиція компонентів | Клієнтські default routes |
@@ -75,24 +75,42 @@ flowchart TB
 
 Таким чином, OS-level VPN відділений від protocol-level VPN на межі `IPacketEndpoint`. Протокол працює зі `Stream` і не викликає Linux API напряму.
 
-## Формат даних у тунелі
+## Pipeline протоколу
 
-Кожен IPv4 або IPv6 пакет передається через TCP одним кадром:
-
-```text
-+----------------------+-----------------------------------+
-| 2 байти, uint16 BE   | raw IPv4 або IPv6 packet          |
-| довжина пакета       | рівно вказана кількість байтів     |
-+----------------------+-----------------------------------+
-```
-
-`PacketTunnelProtocol` одночасно запускає два напрями:
+`TunnelPipeline` перетворює кожен пакет TUN на `TunnelFrame`. Outbound-стадії
+виконуються в порядку реєстрації, а inbound-стадії — у зворотному порядку. Це
+дозволяє майбутній стадії кодувати кадр на клієнті й симетрично декодувати його
+на сервері. Поточний `baseline`-профіль містить лише tracing і pass-through.
 
 ```mermaid
 flowchart LR
-    TunRead[TUN PacketReader] --> AddLength[Додати 2-byte length] --> TcpWrite[NetworkStream]
-    TcpRead[NetworkStream] --> ReadLength[Прочитати length і пакет] --> TunWrite[TUN PacketWriter]
+    TunRead[TUN PacketReader] --> Frame[TunnelFrame]
+    Frame --> Outbound[Outbound stages]
+    Outbound --> Codec[LengthPrefixedCodec]
+    Codec --> TcpWrite[NetworkStream]
+
+    TcpRead[NetworkStream] --> Decode[LengthPrefixedCodec]
+    Decode --> Inbound[Inbound stages, reverse order]
+    Inbound --> TunWrite[TUN PacketWriter]
 ```
+
+Перед обміном кадрами обидві сторони надсилають handshake з magic `SVPN`,
+версією протоколу та назвою профілю. Різні версії або профілі завершують сесію
+явною помилкою замість пошкодження потоку.
+
+## Формат даних у тунелі
+
+`LengthPrefixedCodec` записує один `TunnelFrame` у такому форматі:
+
+```text
++---------------+--------------+----------------+----------------+------------------+
+| uint32 BE     | uint64 BE    | uint16 BE      | uint16 BE      | payload          |
+| body length   | packet ID    | fragment index | fragment count | 1..65535 bytes   |
++---------------+--------------+----------------+----------------+------------------+
+```
+
+У baseline кожен пакет має `fragmentIndex = 0` і `fragmentCount = 1`. Поля
+фрагментації вже є в envelope, але жодна fragmentation-стадія ще не реалізована.
 
 ## Послідовність розгортання і запуску
 
@@ -125,6 +143,8 @@ sequenceDiagram
     Host-->>Client: Номер клієнта N
     Host->>Host: Створити svpnN
     Client->>Client: Створити svpn0 з адресами для N
+    Client->>Host: Handshake version + baseline profile
+    Host-->>Client: Handshake version + baseline profile
     Client->>Host: Запустити tunnel pumps
     Run->>Run: Перевірити IPv4 та IPv6 peers
     Run->>Run: Перемкнути IPv4 default route
@@ -142,7 +162,7 @@ sequenceDiagram
 flowchart LR
     Browser[Firefox] --> CRoute[Маршрути клієнта]
     CRoute --> ClientTun[svpn0]
-    ClientTun --> Frame[Length prefix + IP packet]
+    ClientTun --> Frame[TunnelFrame envelope + IP packet]
     Frame --> TCP[TCP 4433]
     TCP --> Unframe[Відновлений IP packet]
     Unframe --> ServerTun[svpnN]
@@ -175,7 +195,7 @@ sequenceDiagram
     actor User as Оператор
     participant Run as run-vpn.sh
     participant Client as VpnSample.Client
-    participant Protocol as PacketTunnelProtocol
+    participant Protocol as TunnelPipeline
     participant Tun as LinuxTunDevice
 
     User->>Run: Ctrl+C або завершення

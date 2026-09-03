@@ -12,11 +12,15 @@ if (args is ["--print-networks"])
 }
 
 int port = args.Length == 0 ? network.DefaultPort : int.Parse(args[0]);
+string profileName = Environment.GetEnvironmentVariable("VPN_PROFILE") ??
+    TunnelProfileFactory.BaselineProfileName;
+if (!TunnelProfileFactory.IsSupported(profileName))
+    throw new ArgumentException($"Unknown tunnel profile: '{profileName}'.", nameof(profileName));
 var listener = new TcpListener(IPAddress.Any, port);
 listener.Start();
 var clientSlots = new bool[network.ClientCapacity];
 
-Console.WriteLine($"Listening on {listener.LocalEndpoint}");
+Console.WriteLine($"Listening on {listener.LocalEndpoint} with tunnel profile '{profileName}'");
 
 while (true)
 {
@@ -57,8 +61,10 @@ async Task HandleClientAsync(TcpClient tcpClient, int clientNumber)
 
             await transport.WriteAsync(new[] { checked((byte)clientNumber) });
             Console.WriteLine($"Client {clientNumber} connected: {tcpClient.Client.RemoteEndPoint}");
-            var protocol = new PacketTunnelProtocol($"server client={clientNumber}");
-            await protocol.RunAsync(tun, transport);
+            await using var pipeline = TunnelProfileFactory.Create(
+                profileName,
+                $"server client={clientNumber}");
+            await pipeline.RunAsync(tun, transport);
         }
         catch (Exception error)
         {

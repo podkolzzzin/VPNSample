@@ -45,3 +45,8 @@ validate_boolean() {
   local value=$2
   [[ $value == 0 || $value == 1 ]] || fail "$name must be 0 or 1."
 }
+
+validate_profile() {
+  [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] \
+    || fail "VPN_PROFILE must contain 1-64 lowercase letters, digits, or hyphens."
+}

@@ -8,6 +8,7 @@ trace_packets=$4
 trace_hex=$5
 trace_pcap=${6-}
 [[ $trace_pcap == - ]] && trace_pcap=
+profile=${7-baseline}
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
@@ -28,9 +29,9 @@ test -n "$out_interface"
 ip -6 route show default | grep -q .
 ip -6 address show dev "$out_interface" scope global | grep -q 'inet6 '
 
-printf 'VPN_OUT_INTERFACE=%s\nVPN_PORT=%s\nVPN_IPV4_NETWORK=%s\nVPN_IPV6_NETWORK=%s\nVPN_TRACE_PACKETS=%s\nVPN_TRACE_HEX=%s\nVPN_TRACE_PCAP=%s\n' \
+printf 'VPN_OUT_INTERFACE=%s\nVPN_PORT=%s\nVPN_IPV4_NETWORK=%s\nVPN_IPV6_NETWORK=%s\nVPN_TRACE_PACKETS=%s\nVPN_TRACE_HEX=%s\nVPN_TRACE_PCAP=%s\nVPN_PROFILE=%s\n' \
   "$out_interface" "$port" "$ipv4_network" "$ipv6_network" "$trace_packets" \
-  "$trace_hex" "$trace_pcap" \
+  "$trace_hex" "$trace_pcap" "$profile" \
   >/etc/default/vpnsample
 
 cat >/etc/systemd/system/vpnsample.service <<'UNIT'

@@ -15,6 +15,7 @@ VPN_ROUTE_METRIC=${VPN_ROUTE_METRIC:-50}
 VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
+VPN_PROFILE=${VPN_PROFILE:-baseline}
 peer_only=false
 
 usage() {
@@ -36,6 +37,7 @@ Environment:
   VPN_TRACE_PACKETS  Set to 1 for compact packet summaries
   VPN_TRACE_HEX      Set to 1 to add a multiline hexadecimal dump
   VPN_TRACE_PCAP     Base path for a Wireshark-compatible capture
+  VPN_PROFILE        Tunnel pipeline profile (default: baseline)
 EOF
 }
 
@@ -58,6 +60,7 @@ VPN_PORT=${VPN_PORT:-4433}
 validate_port "$VPN_PORT"
 validate_boolean VPN_TRACE_PACKETS "$VPN_TRACE_PACKETS"
 validate_boolean VPN_TRACE_HEX "$VPN_TRACE_HEX"
+validate_profile "$VPN_PROFILE"
 
 if ((EUID != 0)); then
   need sudo
@@ -75,6 +78,7 @@ if ((EUID != 0)); then
     "VPN_TRACE_PACKETS=$VPN_TRACE_PACKETS" \
     "VPN_TRACE_HEX=$VPN_TRACE_HEX" \
     "VPN_TRACE_PCAP=$VPN_TRACE_PCAP" \
+    "VPN_PROFILE=$VPN_PROFILE" \
     "$0" "${sudo_args[@]}"
 fi
 
@@ -107,8 +111,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-log "Connecting to $DROPLET_IP:$VPN_PORT over plain TCP..."
-"$dotnet_bin" "$CLIENT_DLL" "$DROPLET_IP" "$VPN_PORT" &
+log "Connecting to $DROPLET_IP:$VPN_PORT using profile '$VPN_PROFILE'..."
+env VPN_PROFILE="$VPN_PROFILE" \
+  "$dotnet_bin" "$CLIENT_DLL" "$DROPLET_IP" "$VPN_PORT" &
 client_pid=$!
 
 for attempt in $(seq 1 30); do

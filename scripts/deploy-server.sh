@@ -16,6 +16,7 @@ SSH_KNOWN_HOSTS_FILE=${SSH_KNOWN_HOSTS_FILE:-}
 VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
+VPN_PROFILE=${VPN_PROFILE:-baseline}
 
 usage() {
   cat <<'EOF'
@@ -25,7 +26,8 @@ Publish the VPN server, install its runtime and networking prerequisites on the
 recorded droplet, and start it as vpnsample.service.
 
 Environment: VPN_STATE_FILE, SSH_USER (default: root), VPN_TRACE_PACKETS,
-VPN_TRACE_HEX, VPN_TRACE_PCAP, and optional SSH_KNOWN_HOSTS_FILE.
+VPN_TRACE_HEX, VPN_TRACE_PCAP, VPN_PROFILE (default: baseline), and optional
+SSH_KNOWN_HOSTS_FILE.
 EOF
 }
 
@@ -50,6 +52,7 @@ validate_boolean VPN_TRACE_PACKETS "$VPN_TRACE_PACKETS"
 validate_boolean VPN_TRACE_HEX "$VPN_TRACE_HEX"
 [[ $VPN_TRACE_PCAP != *[[:space:]]* ]] \
   || fail "VPN_TRACE_PCAP must not contain whitespace."
+validate_profile "$VPN_PROFILE"
 
 ssh_options_for "$SSH_KEY_PATH" "$SSH_KNOWN_HOSTS_FILE"
 remote=$SSH_USER@$DROPLET_IP
@@ -75,7 +78,7 @@ scp "${SSH_OPTIONS[@]}" -r "$publish_dir/server/." "$remote:/opt/vpnsample/app/"
 log "Installing .NET 10 and configuring forwarding, NAT, and systemd..."
 ssh "${SSH_OPTIONS[@]}" "$remote" bash -s -- \
   "$VPN_PORT" "$ipv4_network" "$ipv6_network" "$VPN_TRACE_PACKETS" \
-  "$VPN_TRACE_HEX" "${VPN_TRACE_PCAP:--}" \
+  "$VPN_TRACE_HEX" "${VPN_TRACE_PCAP:--}" "$VPN_PROFILE" \
   <"$REMOTE_SERVER_SETUP"
 
 ssh "${SSH_OPTIONS[@]}" "$remote" systemctl is-active --quiet vpnsample.service \

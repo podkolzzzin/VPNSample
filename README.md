@@ -26,11 +26,15 @@ From this directory:
 dotnet build VPNSample.slnx
 ```
 
-## Demo stages
+Move through the tagged demo stages from any checked-out stage:
 
-This commit is `stage-01-basic-tunnel`. Move through the development history
-with `./scripts/checkout_next_tag.sh` and `./scripts/checkout_prev_tag.sh`.
-Both commands refuse to replace uncommitted work.
+```bash
+./scripts/checkout_next_tag.sh
+./scripts/checkout_prev_tag.sh
+```
+
+Both scripts refuse to replace uncommitted work. This commit is
+`stage-02-extensible-pipeline`.
 
 The automation layout is documented in [scripts/README.md](scripts/README.md).
 
@@ -145,6 +149,11 @@ sudo env VPN_TRACE_PACKETS=1 dotnet run --project Server -- 4433
 sudo env VPN_TRACE_PACKETS=1 dotnet run --project Client -- SERVER_IP 4433
 ```
 
+The core architecture currently provides only the no-tricks `baseline` profile.
+Both peers must select the same profile. The automation scripts default to
+`VPN_PROFILE=baseline`; future profiles can be selected while deploying and
+running without changing the client or server composition roots.
+
 These modes trace the raw IP packets at each TUN boundary. Address changes
 performed later by server NAT are outside the application and require an
 additional capture on the server's public interface. Hex output and PCAP files
@@ -179,17 +188,25 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
 ## How the code is split
 
 - `Client/Program.cs` and `Server/Program.cs` open a TCP connection, create a TUN
-  endpoint, and connect it to the packet protocol.
+  endpoint, select the baseline profile, and run its tunnel pipeline.
 - `Protocol/IPacketEndpoint.cs` is the OS-neutral boundary consumed by the protocol.
 - `Protocol/TunnelNetwork.cs` contains the tunnel port, networks, interface names,
   prefix lengths, and address assignment rule.
-- `Protocol/PacketTunnelProtocol.cs` frames complete IP packets with a two-byte
-  length and pumps them over any duplex `Stream`. It contains no Linux or network
-  configuration code.
-- `Protocol/PacketTrace.cs` renders summaries and hex dumps,
-  `IpPacketFormatter.cs` decodes IP metadata, and `PcapWriter.cs` writes captures.
+- `Protocol/TunnelPipeline.cs` pumps frames in both directions and applies
+  `ITunnelStage` decorators in forward/reverse order.
+- `Protocol/TunnelFrame.cs` provides stable packet and fragment metadata for
+  future transformations.
+- `Protocol/Codecs/LengthPrefixedCodec.cs` owns the baseline wire format behind
+  the `IWireCodec` strategy boundary.
+- `Protocol/Profiles/TunnelProfileFactory.cs` is the composition point for the
+  current baseline and future demonstration profiles.
+- `Protocol/Stages/PacketTraceStage.cs`, `PacketTrace.cs`,
+  `IpPacketFormatter.cs`, and `PcapWriter.cs` implement packet observation
+  independently of framing and transport orchestration.
 - `Os.Linux/LinuxTunDevice.cs` implements the packet endpoint using `/dev/net/tun`,
   Linux ioctls, and `ip` commands. It contains no TCP or packet-framing code.
+- `Protocol.Tests/` verifies frame validation, codec round trips, handshake
+  compatibility, and bidirectional stage ordering without requiring a TUN device.
 
 This boundary allows the protocol to run against an in-memory endpoint in tests
 and allows another OS backend to be added without changing the wire protocol.

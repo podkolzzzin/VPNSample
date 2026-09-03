@@ -18,6 +18,10 @@ if (args.Length != 2)
 
 string server = args[0];
 int port = int.Parse(args[1]);
+string profileName = Environment.GetEnvironmentVariable("VPN_PROFILE") ??
+    TunnelProfileFactory.BaselineProfileName;
+if (!TunnelProfileFactory.IsSupported(profileName))
+    throw new ArgumentException($"Unknown tunnel profile: '{profileName}'.", nameof(profileName));
 
 using var tcpClient = new TcpClient();
 await tcpClient.ConnectAsync(server, port);
@@ -37,5 +41,6 @@ await using var tun = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
 Console.WriteLine($"Connected as client {clientNumber}.");
 Console.WriteLine($"IPv4: {addresses.ClientIpv4} -> {addresses.ServerIpv4}");
 Console.WriteLine($"IPv6: {addresses.ClientIpv6} -> {addresses.ServerIpv6}");
-var protocol = new PacketTunnelProtocol("client");
-await protocol.RunAsync(tun, transport);
+Console.WriteLine($"Tunnel profile: {profileName}");
+await using var pipeline = TunnelProfileFactory.Create(profileName, "client");
+await pipeline.RunAsync(tun, transport);
