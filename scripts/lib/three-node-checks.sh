@@ -30,6 +30,11 @@ verify_three_node_topology() {
   check_exit_node "$client_b_ip" "$client_b_key"
 
   check_nginx_reachability
+  log "Checking direct mesh while IPv4 full-tunnel policy routing is active..."
+  check_full_tunnel_mesh \
+    "$client_b_ip" "$client_b_key" "$client_a_tunnel_v4" \
+    "$CLIENT_A_NAME.$VPN_DNS_ZONE"
+  assert_direct_mesh_data
   print_three_node_result
 }
 
@@ -110,10 +115,23 @@ check_overlay_dns() {
     "resolvectl query '$requester_name' | grep -F '$client_b_tunnel_v4' && resolvectl query '$requester_name' | grep -F '$client_b_tunnel_v6'"
 }
 
+assert_direct_mesh_data() {
+  ssh_options_for "$client_a_key" "$work_dir/known_hosts"
+  ssh "${SSH_OPTIONS[@]}" "root@$client_a_ip" \
+    "grep -Fq 'Direct mesh data sent: $CLIENT_B_NAME.vpn' /opt/vpnsample-client/client.log && grep -Fq 'Direct mesh data received: $CLIENT_B_NAME.vpn' /opt/vpnsample-client/client.log" \
+    || fail "Client A did not exchange peer packets over its direct mesh path."
+  ssh_options_for "$client_b_key" "$work_dir/known_hosts"
+  ssh "${SSH_OPTIONS[@]}" "root@$client_b_ip" \
+    "grep -Fq 'Direct mesh data sent: $CLIENT_A_NAME.vpn' /opt/vpnsample-client/client.log && grep -Fq 'Direct mesh data received: $CLIENT_A_NAME.vpn' /opt/vpnsample-client/client.log" \
+    || fail "Client B did not exchange peer packets over its direct mesh path."
+}
+
 print_three_node_result() {
   printf '\n===== THREE-NODE RESULT =====\n'
   printf 'PASS: the server used one shared TUN and clients selected automatic overlay routes.\n'
   printf 'PASS: clients reached each other through the VPN over IPv4 and IPv6.\n'
+  printf 'PASS: peer traffic used authenticated, encrypted direct UDP paths.\n'
+  printf 'PASS: marked mesh UDP stayed on the underlay during IPv4 full-tunnel routing.\n'
   printf 'PASS: private DNS resolved both client names to their IPv4 and IPv6 addresses.\n'
   printf 'PASS: both clients reached the internet through the exit node over IPv4 and IPv6.\n'
   printf 'PASS: client B fetched nginx from %s.%s over IPv4 and IPv6.\n' \

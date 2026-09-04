@@ -22,6 +22,10 @@ VPN_COVER_TOKEN=${VPN_COVER_TOKEN:-}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-}
 VPN_TLS_PINNED_CERTIFICATE=${VPN_TLS_PINNED_CERTIFICATE:-}
 VPN_NODE_NAME=${VPN_NODE_NAME:-}
+VPN_MESH_KEY_FILE=${VPN_MESH_KEY_FILE:-$PROJECT_ROOT/.vpn-mesh-key}
+VPN_MESH_SOCKET_MARK=${VPN_MESH_SOCKET_MARK:-19795}
+VPN_MESH_ROUTE_TABLE=${VPN_MESH_ROUTE_TABLE:-51820}
+VPN_MESH_RULE_PRIORITY=${VPN_MESH_RULE_PRIORITY:-10000}
 peer_only=false
 
 usage() {
@@ -47,6 +51,10 @@ Environment:
   VPN_PROFILE        Tunnel pipeline profile (default: websocket-cover)
   VPN_COVER_TOKEN    WebSocket access token (state file default)
   VPN_NODE_NAME      Node name (default: this machine's hostname)
+  VPN_MESH_KEY_FILE  Persistent P-256 node key (default: .vpn-mesh-key)
+  VPN_MESH_SOCKET_MARK  Linux packet mark for direct mesh UDP (default: 19795)
+  VPN_MESH_ROUTE_TABLE  WAN bypass routing table (default: 51820)
+  VPN_MESH_RULE_PRIORITY  WAN bypass rule priority (default: 10000)
   VPN_TLS_SERVER_NAME  HTTPS SNI/Host name (state file default: vpn.twocubes.io)
   VPN_TLS_PINNED_CERTIFICATE  Optional pinned server certificate
 EOF
@@ -72,6 +80,11 @@ VPN_NODE_NAME=${VPN_NODE_NAME:-$(hostname --short)}
 : "${VPN_COVER_TOKEN:?VPN_COVER_TOKEN is missing from $STATE_FILE}"
 [[ $VPN_ROUTE_METRIC =~ ^[0-9]+$ ]] && ((VPN_ROUTE_METRIC >= 1 && VPN_ROUTE_METRIC <= 4294967295)) \
   || fail "VPN_ROUTE_METRIC must be an integer from 1 to 4294967295."
+for numeric_setting in VPN_MESH_SOCKET_MARK VPN_MESH_ROUTE_TABLE VPN_MESH_RULE_PRIORITY; do
+  numeric_value=${!numeric_setting}
+  [[ $numeric_value =~ ^[0-9]+$ ]] && ((numeric_value >= 1 && numeric_value <= 2147483646)) \
+    || fail "$numeric_setting must be an integer from 1 to 2147483646."
+done
 validate_port "$VPN_PORT"
 validate_boolean VPN_TRACE_PACKETS "$VPN_TRACE_PACKETS"
 validate_boolean VPN_TRACE_HEX "$VPN_TRACE_HEX"
@@ -98,6 +111,10 @@ if ((EUID != 0)); then
     "VPN_TRACE_PCAP=$VPN_TRACE_PCAP" \
     "VPN_PROFILE=$VPN_PROFILE" \
     "VPN_COVER_TOKEN=$VPN_COVER_TOKEN" \
+    "VPN_MESH_KEY_FILE=$VPN_MESH_KEY_FILE" \
+    "VPN_MESH_SOCKET_MARK=$VPN_MESH_SOCKET_MARK" \
+    "VPN_MESH_ROUTE_TABLE=$VPN_MESH_ROUTE_TABLE" \
+    "VPN_MESH_RULE_PRIORITY=$VPN_MESH_RULE_PRIORITY" \
     "VPN_TLS_SERVER_NAME=$VPN_TLS_SERVER_NAME" \
     "VPN_TLS_PINNED_CERTIFICATE=$VPN_TLS_PINNED_CERTIFICATE" \
     "$0" "${sudo_args[@]}"
@@ -133,7 +150,9 @@ cleanup() {
   fi
   if [[ $routes_changed == true ]]; then
     log "Restoring original routes..."
-    vpn_routes_restore "$DROPLET_IP" "$VPN_ROUTE_METRIC" || true
+    vpn_routes_restore \
+      "$DROPLET_IP" "$VPN_ROUTE_METRIC" \
+      "$VPN_MESH_SOCKET_MARK" "$VPN_MESH_ROUTE_TABLE" "$VPN_MESH_RULE_PRIORITY" || true
   fi
   log "VPN stopped."
   exit "$exit_status"
@@ -145,6 +164,8 @@ env \
   "VPN_TLS_SERVER_NAME=$VPN_TLS_SERVER_NAME" \
   "VPN_TLS_PINNED_CERTIFICATE=$VPN_TLS_PINNED_CERTIFICATE" \
   "VPN_COVER_TOKEN=$VPN_COVER_TOKEN" \
+  "VPN_MESH_KEY_FILE=$VPN_MESH_KEY_FILE" \
+  "VPN_MESH_SOCKET_MARK=$VPN_MESH_SOCKET_MARK" \
   "$dotnet_bin" "$CLIENT_DLL" "$DROPLET_IP" "$VPN_PORT" "$VPN_NODE_NAME" &
 client_pid=$!
 
@@ -173,15 +194,21 @@ log "IPv4 and IPv6 peer tests passed."
 if [[ $peer_only == false ]]; then
   log "Preserving the direct server route and switching IPv4/IPv6 default routes..."
   routes_changed=true
-  vpn_routes_apply "$DROPLET_IP" "$VPN_ROUTE_METRIC"
+  vpn_routes_apply \
+    "$DROPLET_IP" "$VPN_ROUTE_METRIC" \
+    "$VPN_MESH_SOCKET_MARK" "$VPN_MESH_ROUTE_TABLE" "$VPN_MESH_RULE_PRIORITY"
 
   selected_ipv4_interface=$(route_interface 4 "$ipv4_route_probe")
   selected_ipv6_interface=$(route_interface 6 "$ipv6_route_probe")
+  selected_mesh_interface=$(marked_route_interface "$DROPLET_IP" "$VPN_MESH_SOCKET_MARK")
   [[ $selected_ipv4_interface == svpn0 ]] \
     || fail "IPv4 leak check failed: traffic still selects $selected_ipv4_interface."
   [[ $selected_ipv6_interface == svpn0 ]] \
     || fail "IPv6 leak check failed: traffic still selects $selected_ipv6_interface."
+  [[ $selected_mesh_interface == "$VPN_SERVER_INTERFACE" ]] \
+    || fail "Mesh recursion check failed: marked UDP selects $selected_mesh_interface."
   log "Route leak checks passed: IPv4 and IPv6 both select svpn0 (metric $VPN_ROUTE_METRIC)."
+  log "Mesh recursion check passed: marked UDP selects $selected_mesh_interface."
   log "All IPv4 and IPv6 traffic now uses the VPN. Press Ctrl-C to disconnect and restore routes."
 else
   log "Peer-only mode is active. The overlay subnet uses svpn0; internet traffic keeps its original route. Press Ctrl-C to stop."

@@ -22,7 +22,7 @@ start_vpn_client() {
   local node_name=$4
   ssh_options_for "$key" "$work_dir/known_hosts"
   ssh "${SSH_OPTIONS[@]}" "root@$ip" \
-    "nohup env VPN_PROFILE='$VPN_PROFILE' VPN_COVER_TOKEN='$cover_token' VPN_TLS_SERVER_NAME='$tls_server_name' VPN_TLS_PINNED_CERTIFICATE=/opt/vpnsample-client/tls.crt /opt/vpnsample-client/dotnet/dotnet /opt/vpnsample-client/app/Client.dll '$server_ip' '$vpn_port' '$node_name' >/opt/vpnsample-client/client.log 2>&1 </dev/null & echo \$! >/opt/vpnsample-client/client.pid"
+    "nohup env VPN_PROFILE='$VPN_PROFILE' VPN_COVER_TOKEN='$cover_token' VPN_TLS_SERVER_NAME='$tls_server_name' VPN_TLS_PINNED_CERTIFICATE=/opt/vpnsample-client/tls.crt VPN_MESH_KEY_FILE=/opt/vpnsample-client/mesh-identity.key VPN_MESH_SOCKET_MARK='$MESH_SOCKET_MARK' /opt/vpnsample-client/dotnet/dotnet /opt/vpnsample-client/app/Client.dll '$server_ip' '$vpn_port' '$node_name' >/opt/vpnsample-client/client.log 2>&1 </dev/null & echo \$! >/opt/vpnsample-client/client.pid"
 }
 
 configure_overlay_dns() {
@@ -31,6 +31,24 @@ configure_overlay_dns() {
   ssh_options_for "$key" "$work_dir/known_hosts"
   ssh "${SSH_OPTIONS[@]}" "root@$ip" \
     "resolvectl dns svpn0 '$dns_server_ipv4'; resolvectl domain svpn0 '$VPN_DNS_ZONE'; resolvectl default-route svpn0 false; resolvectl flush-caches"
+}
+
+wait_for_direct_mesh() {
+  local ip=$1
+  local key=$2
+  local peer_name=$3
+  local expected="Direct mesh path: $peer_name.vpn via udp://"
+  ssh_options_for "$key" "$work_dir/known_hosts"
+  for attempt in $(seq 1 30); do
+    if ssh "${SSH_OPTIONS[@]}" "root@$ip" \
+      "grep -Fq '$expected' /opt/vpnsample-client/client.log" 2>/dev/null; then
+      return
+    fi
+    sleep 1
+  done
+  ssh "${SSH_OPTIONS[@]}" "root@$ip" \
+    'cat /opt/vpnsample-client/client.log' || true
+  fail "Client on $ip did not establish a direct UDP path to $peer_name.vpn."
 }
 
 wait_for_tunnel() {
@@ -92,6 +110,18 @@ check_exit_node() {
   ssh_options_for "$key" "$work_dir/known_hosts"
   ssh "${SSH_OPTIONS[@]}" "root@$ip" \
     'ip route replace 1.1.1.1/32 dev svpn0; ip -6 route replace 2606:4700:4700::1111/128 dev svpn0; ping -c 2 -W 5 1.1.1.1; ping -6 -c 2 -W 5 2606:4700:4700::1111'
+}
+
+check_full_tunnel_mesh() {
+  local ip=$1
+  local key=$2
+  local peer_address=$3
+  local peer_name=$4
+  ssh_options_for "$key" "$work_dir/known_hosts"
+  ssh "${SSH_OPTIONS[@]}" "root@$ip" bash -s -- \
+    "$peer_address" "$peer_name" "$server_ip" \
+    "$MESH_SOCKET_MARK" "$MESH_ROUTE_TABLE" "$MESH_RULE_PRIORITY" \
+    <"$REMOTE_FULL_TUNNEL_CHECK"
 }
 
 assert_overlay_route() {

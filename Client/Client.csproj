@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Dns/VpnSample.Dns.csproj" />
+    <ProjectReference Include="../Mesh/VpnSample.Mesh.csproj" />
     <ProjectReference Include="../Protocol/VpnSample.Protocol.csproj" />
     <ProjectReference Include="../Os.Linux/VpnSample.Os.Linux.csproj" />
   </ItemGroup>

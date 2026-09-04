@@ -37,6 +37,7 @@ assert_equal /tmp/test-key "${SSH_OPTIONS[1]}" 'SSH identity path'
   || fail 'SSH known-hosts option is missing.'
 
 ip() {
+  ip_calls+=("$*")
   case "$*" in
     '-4 route show default')
       printf '%s\n' 'default via 192.0.2.1 dev eth0'
@@ -49,21 +50,39 @@ ip() {
     '-4 route get 1.1.1.1'|'-6 route get 2606:4700:4700::1111')
       printf '%s\n' 'test dev svpn0 src test'
       ;;
+    '-4 route get 203.0.113.10 mark 19795')
+      printf '%s\n' '203.0.113.10 via 192.0.2.1 dev eth0 src 192.0.2.2 mark 0x4d53'
+      ;;
     *)
       ;;
   esac
 }
 
+ip_calls=()
 vpn_routes_capture 203.0.113.10
 assert_equal 'default via 192.0.2.1 dev eth0' "$VPN_ORIGINAL_DEFAULT" \
   'captured default route'
 assert_equal 192.0.2.1 "$VPN_SERVER_GATEWAY" 'captured server gateway'
 assert_equal eth0 "$VPN_SERVER_INTERFACE" 'captured server interface'
-vpn_routes_apply 203.0.113.10 50
+vpn_routes_apply 203.0.113.10 50 19795 51820 10000
+[[ " ${ip_calls[*]} " == *" -4 route replace table 51820 default dev svpn0 "* ]] \
+  || fail 'Full-tunnel policy route was not installed.'
+[[ " ${ip_calls[*]} " == *" -4 rule add priority 10000 not fwmark 19795 lookup 51820 "* ]] \
+  || fail 'Full-tunnel socket-mark exclusion was not installed.'
+[[ " ${ip_calls[*]} " == *" -4 rule add priority 10001 table main suppress_prefixlength 0 "* ]] \
+  || fail 'Main-table LAN route rule was not installed.'
 assert_equal svpn0 "$(route_interface 4 1.1.1.1)" 'IPv4 route selection'
 assert_equal svpn0 "$(route_interface 6 2606:4700:4700::1111)" \
   'IPv6 route selection'
-vpn_routes_restore 203.0.113.10 50
+assert_equal eth0 "$(marked_route_interface 203.0.113.10 19795)" \
+  'marked mesh route selection'
+vpn_routes_restore 203.0.113.10 50 19795 51820 10000
+[[ " ${ip_calls[*]} " == *" -4 rule del priority 10000 not fwmark 19795 lookup 51820 "* ]] \
+  || fail 'Full-tunnel socket-mark exclusion was not removed.'
+[[ " ${ip_calls[*]} " == *" -4 rule del priority 10001 table main suppress_prefixlength 0 "* ]] \
+  || fail 'Main-table LAN route rule was not removed.'
+[[ " ${ip_calls[*]} " == *" -4 route flush table 51820 "* ]] \
+  || fail 'Mesh WAN bypass table was not flushed.'
 
 dns_calls=()
 resolvectl() { dns_calls+=("$*"); }

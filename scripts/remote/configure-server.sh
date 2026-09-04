@@ -69,6 +69,7 @@ UNIT
 
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
   ufw allow "$port/tcp" >/dev/null
+  ufw allow "$port/udp" >/dev/null
 fi
 
 systemctl daemon-reload

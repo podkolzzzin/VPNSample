@@ -153,12 +153,26 @@ Dns/
   NodeRegistrationProtocol.cs
   OverlayDnsRegistry.cs
   OverlayDnsServer.cs
+
+Mesh/
+  MeshPacketEndpoint.cs
+  MeshCoordinator.cs
+  MeshControlProtocol.cs
+  MeshIdentity.cs
+  SecureMeshDatagram.cs
+  UdpRendezvousProtocol.cs
 ```
 
 Private naming is deliberately outside the packet-transformation pipeline. The
 separate `VpnSample.Dns` assembly owns registration and DNS wire responses,
 while the server composition root connects each DNS lease to the addresses
 already assigned by `TunnelNetwork`.
+
+The final mesh stage puts `MeshPacketEndpoint` in front of the relay pipeline.
+It consumes packets for peers with a live direct UDP path and passes DNS,
+exit-node traffic, and unavailable peers to the existing WSS pipeline. Thus the
+earlier masking/shuffling stages remain demonstrable on fallback traffic while
+the primary peer path preserves UDP datagram boundaries.
 
 ## Important protocol details
 

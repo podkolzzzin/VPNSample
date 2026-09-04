@@ -1,5 +1,30 @@
 # Serverless Peer-to-Peer VPN Design
 
+## Stage 08 implementation status
+
+`stage-08-peer-to-peer-mesh` implements the demo architecture described here:
+
+- `MeshPacketEndpoint` performs client-side overlay route lookup.
+- One stable IPv4 UDP socket is used for rendezvous binding, candidate probes,
+  keepalives, and direct peer packets.
+- `MeshCoordinator` distributes overlay addresses, P-256 public keys, local
+  candidates, and server-reflexive endpoints over an authenticated WSS channel.
+- Simultaneous authenticated probes provide simplified ICE-like NAT hole punching.
+- P-256 ECDH-derived pairwise keys, AES-256-GCM, per-process nonce prefixes,
+  sequence numbers, and a 64-packet replay window protect direct datagrams.
+- Node private keys persist locally; the coordination server never receives them.
+- Full-tunnel clients mark the mesh UDP socket and use Linux policy routing to
+  keep its underlay packets on the original WAN route.
+- A fresh authenticated direct path is preferred. After 20 seconds without an
+  authenticated packet, traffic falls back to the existing WSS relay.
+- DNS and exit-node traffic intentionally continue through the server.
+
+This is Tailscale-like in topology, not protocol-compatible with Tailscale. It
+uses a small custom rendezvous protocol rather than full STUN/ICE, and its WSS
+fallback terminates tunnel encryption on the server rather than acting as a
+DERP-style end-to-end encrypted blind relay. The remaining production gaps are
+listed below.
+
 The project will need to evolve from a client/server TCP tunnel into a
 **peer-to-peer encrypted UDP mesh**.
 
@@ -27,8 +52,8 @@ and policy but normally does not carry VPN traffic. See
 
 ## 1. UDP transport
 
-Replace the current TCP `NetworkStream` data plane with a packet-preserving
-abstraction:
+The implemented direct path is packet-preserving UDP. A general transport
+abstraction could still be extracted as:
 
 ```csharp
 public interface IDatagramTransport
@@ -59,15 +84,12 @@ to that specific local UDP endpoint.
 
 ## 2. Encryption and peer identity
 
-The current tunnel is explicitly unencrypted and unauthenticated. Before
-exposing peer UDP sockets, add:
+The direct path now has persistent node keys, authenticated key agreement, AEAD,
+and replay protection. A production design would additionally require:
 
-- A persistent node key pair.
-- Authenticated peer public keys.
-- An authenticated key exchange.
-- Replay protection.
-- AEAD encryption.
 - Key rotation and revocation.
+- Device enrollment and per-node authorization.
+- Auditable key transparency or signed peer maps.
 
 For anything beyond a protocol-learning experiment, use WireGuard instead of
 designing new cryptography. WireGuard already provides authenticated
@@ -82,11 +104,11 @@ coordination. See the
 
 ## 3. Candidate gathering
 
-Each peer must collect possible addresses through which it can be reached:
+Each peer currently collects local IPv4 and server-reflexive IPv4 candidates.
+A production implementation should additionally collect:
 
-- Local IPv4 addresses.
 - Local IPv6 addresses.
-- Public server-reflexive addresses discovered through STUN.
+- Public server-reflexive addresses discovered through standard STUN.
 - Port mappings created with PCP, NAT-PMP, or UPnP, optionally.
 - Relay addresses, when available.
 
@@ -244,18 +266,18 @@ Direct path: UDP datagrams
 Fallback:    encrypted frames over HTTPS/WebSocket
 ```
 
-## Suggested implementation order
+## Implementation order
 
-1. Direct UDP tunnel between two public addresses.
-2. Encryption and authenticated peer identity.
-3. Multiple peers and overlay route lookup.
-4. STUN using the same UDP socket as tunnel traffic.
-5. Minimal coordination service.
-6. Simultaneous authenticated connectivity probes.
-7. Keepalives and automatic path migration.
-8. TURN- or DERP-like relay fallback.
-9. ACLs, key rotation, device enrollment, and revocation.
-10. Optional DNS names, subnet routers, and exit nodes.
+1. ✅ Direct UDP tunnel between peers.
+2. ✅ Encryption, persistent peer identity, and replay protection.
+3. ✅ Multiple peers and overlay route lookup.
+4. ✅ Server-reflexive discovery using the same UDP socket; standard STUN remains.
+5. ✅ Minimal WSS coordination service.
+6. ✅ Simultaneous authenticated connectivity probes.
+7. ✅ Keepalives, stale-path expiry, and path migration.
+8. ◐ WSS relay fallback exists; a blind E2E DERP/TURN relay remains.
+9. ☐ ACLs, key rotation, device enrollment, and revocation.
+10. ✅ DNS names and exit-node routing.
 
 The smallest credible first milestone is **two encrypted peers, a manual
 invitation blob, one STUN server, and direct UDP punching**. The smallest

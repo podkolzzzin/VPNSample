@@ -1,9 +1,9 @@
 # Simple IP tunnel (.NET 10 / C#)
 
 A small Linux-only learning project. Every client gets a dual-stack TUN interface
-in one shared overlay subnet and exchanges raw IPv4 and IPv6 packets with the server
-over its own TCP connection. The server uses one TUN as an IPv4/IPv6 exit node and
-routes client-to-client packets in .NET.
+in one shared overlay subnet. Client-to-client traffic normally travels directly
+over an end-to-end encrypted UDP path; the server coordinates peers and remains a
+WSS relay fallback, private DNS server, and IPv4/IPv6 exit node.
 
 Clients register a node name when they connect. The separate `VpnSample.Dns`
 assembly serves authoritative A and AAAA records in the private `.vpn` zone, so
@@ -12,12 +12,16 @@ nodes can reach one another as, for example, `nginx-node.vpn`.
 Current architecture, deployment flow, and IPv4/IPv6 routing diagrams are in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-The current transport is a standard RFC 6455 WebSocket at
-`wss://vpn.twocubes.io/api/v1/events`. The same HTTPS endpoint serves an ordinary
-HTML page at `/`; requests without the generated bearer token receive a normal
-`404`. The automated demo pins a temporary certificate. The token prevents
-unauthenticated probing but is not a full client identity system, so this remains
-a learning project rather than a production VPN.
+The control plane and relay use standard RFC 6455 WebSockets at
+`wss://vpn.twocubes.io/api/v1/mesh` and `/api/v1/events`. Peers use the same
+stable UDP socket for rendezvous, authenticated probes, NAT keepalives, and
+encrypted packets. The HTTPS root still serves an ordinary cover page and
+unauthenticated probes receive `404`.
+
+Each node persists a P-256 identity. Coordination distributes public keys and
+local/server-reflexive endpoint candidates; peers derive pairwise keys and use
+AES-256-GCM plus a replay window on the direct path. This is intentionally a
+learning protocol, not a replacement for WireGuard or a production VPN.
 
 The default `websocket-cover` profile reorders windows of up to three IP packets,
 splits each into fragments of at most 240 bytes, and pads frames into size buckets.
@@ -30,7 +34,7 @@ The earlier `shuffle-split` and no-tricks `baseline` profiles remain available.
 - `iproute2`; `systemd-resolved`; `iptables` for internet forwarding; `openssl`
   for demo certificates
 - root privileges for `/dev/net/tun` and network configuration
-- TCP port 443 allowed through the server firewall
+- TCP and UDP port 443 allowed through the server firewall
 
 ## Build
 
@@ -40,7 +44,7 @@ From this directory:
 dotnet build VPNSample.slnx
 ```
 
-This commit is the seventh demo stage, `stage-07-overlay-dns`.
+This commit is the eighth demo stage, `stage-08-peer-to-peer-mesh`.
 
 Move through the tagged demo stages from any checked-out stage:
 
@@ -90,17 +94,22 @@ VPN_TLS_PRIVATE_KEY=/path/to/privkey.pem \
 ```
 
 The server itself returns a small cover site at `/`. To preserve a different
-existing site, put this service behind its reverse proxy and forward only
-`/api/v1/events`. On the wire the outer connection is real TLS plus a standard
-WebSocket on TCP/443. A network observer can still see the destination IP and
-normally the TLS SNI, so the DNS record and server address should agree in a
-permanent setup.
+existing site, put this service behind its reverse proxy and forward
+`/api/v1/events` plus `/api/v1/mesh`; UDP/443 must still reach the rendezvous
+socket directly. A network observer can still see the destination IP, TLS SNI,
+UDP endpoints, traffic volume, and timing.
 
 By default, `run-vpn.sh` replaces the local IPv4 and IPv6 default routes while the
 client is running and restores them on exit. Use `--peer-only` to create and test
 the tunnel without changing either default route. The VPN IPv6 route uses metric
 50 so it wins over typical router-advertisement routes; override this with
-`VPN_ROUTE_METRIC` if the host has a still-lower-priority metric.
+`VPN_ROUTE_METRIC` if the host has a still-lower-priority metric. In full-tunnel
+mode the script marks the mesh UDP socket and installs a temporary IPv4 policy
+table for the VPN default. Marked rendezvous and direct-peer datagrams bypass
+that table and retain the original WAN or LAN route. This prevents the mesh
+transport from recursively entering its own TUN. The
+mark, table, and rule priority can be changed with `VPN_MESH_SOCKET_MARK`,
+`VPN_MESH_ROUTE_TABLE`, and `VPN_MESH_RULE_PRIORITY`.
 
 Always remove the temporary droplet when finished:
 
@@ -121,7 +130,8 @@ To reproduce the server plus two-client test in three DigitalOcean regions:
 
 The script creates a VPN server in Amsterdam, an nginx client in Frankfurt,
 and a requester client in New York. It verifies bidirectional IPv4 and IPv6
-ping, confirms TLS plus WebSocket on both clients, checks internet
+ping, waits for authenticated direct UDP paths on both clients, proves peer
+packets were sent and received through those paths, checks internet
 reachability through the exit node, resolves both private node names, fetches
 nginx as `nginx-node.vpn` over both tunnel address families, checks nginx's
 access log for the requester's overlay addresses, and deletes all temporary
@@ -157,6 +167,7 @@ sudo env \
   VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   VPN_TLS_PINNED_CERTIFICATE=/path/to/server.crt \
   VPN_COVER_TOKEN=0123456789abcdef0123456789abcdef \
+  VPN_MESH_KEY_FILE=/path/to/persistent-mesh.key \
   dotnet run --project Client -- SERVER_IP 443 my-laptop
 ```
 
@@ -166,6 +177,8 @@ digits, or hyphens; names are case-insensitive and must be unique among connecte
 clients. `scripts/run-vpn.sh --name my-laptop` also configures `systemd-resolved`
 to use `10.8.0.1` for the `.vpn` zone and restores the previous per-link DNS
 settings when the VPN stops.
+The wrapper stores the persistent node identity in `.vpn-mesh-key` by default;
+set `VPN_MESH_KEY_FILE` to choose another location.
 
 Once two clients are connected, applications can use their private names:
 
@@ -237,7 +250,7 @@ sudo env VPN_TRACE_PACKETS=1 VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   dotnet run --project Client -- SERVER_IP 443
 ```
 
-The core architecture provides three profiles. `baseline` traces and forwards
+The relay path provides three profiles. `baseline` traces and forwards
 each packet unchanged. `shuffle-split` additionally buffers up to three packets
 for at most 5 ms, changes their order, and splits each into 256-byte tunnel
 frames. The default `websocket-cover` uses 240-byte fragments and pads them to
@@ -253,8 +266,8 @@ smaller TCP writes. Packet shuffling is deliberate IP-packet reordering; TCP
 inside the tunnel can recover through its own sequence numbers, while protocols
 that depend on UDP arrival order may observe the change.
 
-These transformations alter encrypted record sizes, timing, and correspondence
-between inner packets and writes, but they do not guarantee DPI evasion. A
+These transformations apply to WSS relay/exit traffic. The primary peer path is
+packet-preserving encrypted UDP. They do not guarantee DPI evasion: a
 network observer can still fingerprint TLS behavior and see the destination,
 traffic volume, and timing.
 
@@ -293,8 +306,8 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
 
 ## How the code is split
 
-- `Client/Program.cs` and `Server/Program.cs` establish an authenticated WSS
-  connection, create a TUN endpoint, select a named profile, and run its pipeline.
+- `Client/Program.cs` and `Server/Program.cs` compose WSS coordination/relay,
+  direct UDP mesh, DNS, TUN, and the selected relay pipeline.
 - `Protocol/IPacketEndpoint.cs` is the OS-neutral boundary consumed by the protocol.
 - `Protocol/TunnelNetwork.cs` contains the tunnel port, networks, interface names,
   prefix lengths, and address assignment rule.
@@ -311,6 +324,9 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
 - `Protocol/Stages/PaddingStage.cs` hides exact fragment lengths behind buckets.
 - `Dns/` is a separate assembly containing node registration, the in-memory
   lease registry, and the authoritative UDP DNS server for `.vpn`.
+- `Mesh/` contains the coordination protocol, persistent P-256 identity,
+  pairwise AES-GCM datagrams, replay protection, UDP rendezvous, path maintenance,
+  direct overlay routing, and relay fallback endpoint.
 - `Protocol/WebSocketTunnelTransport.cs` creates the pinned, authenticated WSS
   client while `WebSocketDuplexStream.cs` adapts WebSocket messages to the
   pipeline's existing `Stream` boundary.
@@ -321,6 +337,8 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
   Linux ioctls, and `ip` commands. It contains no TCP or packet-framing code.
 - `Protocol.Tests/` verifies frame validation, codec round trips, handshake
   compatibility, and bidirectional stage ordering without requiring a TUN device.
+- `Mesh.Tests/` proves crypto interoperability, replay rejection, identity
+  persistence, control framing, direct UDP delivery, and relay fallback.
 
 This boundary allows the protocol to run against an in-memory endpoint in tests
 and allows another OS backend to be added without changing the wire protocol.

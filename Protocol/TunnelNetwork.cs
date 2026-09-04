@@ -16,6 +16,7 @@ public sealed class TunnelNetwork
     public string Ipv6Prefix { get; } = "fd42:8";
     public int Ipv6NetworkPrefixLength { get; } = 64;
     public int Ipv6InterfacePrefixLength { get; } = 64;
+    public int OverlayMtu { get; } = 1280;
     public string Ipv4RouteProbe { get; } = "1.1.1.1";
     public string Ipv6RouteProbe { get; } = "2606:4700:4700::1111";
     public string Ipv4Network => $"{Ipv4Prefix}.0/{Ipv4NetworkPrefixLength}";

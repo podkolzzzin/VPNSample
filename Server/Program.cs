@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using VpnSample.Dns;
+using VpnSample.Mesh;
 using VpnSample.Os;
 using VpnSample.Protocol;
 
@@ -16,6 +17,7 @@ if (args is ["--print-networks"])
 }
 
 int port = args.Length == 0 ? network.DefaultPort : int.Parse(args[0]);
+int meshPort = port;
 string profileName = Environment.GetEnvironmentVariable("VPN_PROFILE") ??
     TunnelProfileFactory.DefaultProfileName;
 if (!TunnelProfileFactory.IsSupported(profileName))
@@ -36,7 +38,8 @@ using X509Certificate2 certificate = X509Certificate2.CreateFromPemFile(
 await using var exitNode = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
     Name: network.ServerInterfaceName,
     Ipv4Address: $"{network.ServerIpv4}/{network.Ipv4InterfacePrefixLength}",
-    Ipv6Address: $"{network.ServerIpv6}/{network.Ipv6InterfacePrefixLength}"));
+    Ipv6Address: $"{network.ServerIpv6}/{network.Ipv6InterfacePrefixLength}",
+    Mtu: network.OverlayMtu));
 var router = new TunnelPacketRouter(exitNode, network);
 Task exitNodeRouting = router.RouteExitNodePacketsAsync();
 var dnsRegistry = new OverlayDnsRegistry();
@@ -44,6 +47,11 @@ await using var dnsServer = new OverlayDnsServer(
     new System.Net.IPEndPoint(System.Net.IPAddress.Parse(network.ServerIpv4), 53),
     dnsRegistry);
 Task dnsServing = dnsServer.RunAsync();
+var meshCoordinator = new MeshCoordinator();
+await using var udpRendezvous = new UdpRendezvousServer(
+    new System.Net.IPEndPoint(System.Net.IPAddress.Any, meshPort),
+    meshCoordinator);
+Task udpRendezvousServing = udpRendezvous.RunAsync();
 var clientSlots = new bool[network.ClientCapacity];
 
 WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
@@ -66,15 +74,20 @@ string coverPage = await File.ReadAllTextAsync(
     Path.Combine(AppContext.BaseDirectory, "CoverPage.html"));
 app.MapGet("/", () => Results.Content(coverPage, "text/html; charset=utf-8"));
 app.MapGet(WebSocketTunnelTransport.Path, HandleClientAsync);
+app.MapGet(MeshControlProtocol.Path, HandleMeshControlAsync);
 app.MapFallback(() => Results.NotFound());
 
 Console.WriteLine(
     $"Serving https://{tlsServerName}:{port}/ with a protected WebSocket tunnel " +
     $"using profile '{profileName}', overlay {network.Ipv4Network} / {network.Ipv6Network}, " +
-    $"DNS zone .{dnsRegistry.Zone}");
+    $"DNS zone .{dnsRegistry.Zone}, UDP rendezvous :{meshPort}");
 
 Task webServer = app.RunAsync();
-Task completed = await Task.WhenAny(webServer, exitNodeRouting, dnsServing);
+Task completed = await Task.WhenAny(
+    webServer,
+    exitNodeRouting,
+    dnsServing,
+    udpRendezvousServing);
 if (completed != webServer)
 {
     await app.StopAsync();
@@ -104,6 +117,7 @@ async Task HandleClientAsync(HttpContext context)
         return;
     }
 
+    string? meshSessionToken = null;
     try
     {
         WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
@@ -125,9 +139,14 @@ async Task HandleClientAsync(HttpContext context)
             return;
         }
 
+        meshSessionToken = meshCoordinator.RegisterDataSession(nodeName, addresses);
         await NodeRegistrationProtocol.WriteAcceptedAsync(
             transport,
             clientNumber,
+            context.RequestAborted);
+        await MeshSessionProtocol.WriteAsync(
+            transport,
+            meshSessionToken,
             context.RequestAborted);
         await using RoutedPacketEndpoint peer = router.RegisterPeer(addresses);
 
@@ -146,8 +165,36 @@ async Task HandleClientAsync(HttpContext context)
     }
     finally
     {
+        if (meshSessionToken is not null)
+            meshCoordinator.UnregisterDataSession(meshSessionToken);
         lock (clientSlots)
             clientSlots[clientNumber] = false;
+    }
+}
+
+async Task HandleMeshControlAsync(HttpContext context)
+{
+    string sessionToken = context.Request.Headers[MeshControlProtocol.SessionHeader].ToString();
+    if (!context.WebSockets.IsWebSocketRequest ||
+        !HasAccessToken(context, accessToken) ||
+        !meshCoordinator.ContainsSession(sessionToken))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    try
+    {
+        WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+        await using var transport = new WebSocketDuplexStream(socket);
+        await meshCoordinator.RunControlSessionAsync(
+            sessionToken,
+            transport,
+            context.RequestAborted);
+    }
+    catch (Exception error)
+    {
+        Console.WriteLine($"Mesh control disconnected: {error.Message}");
     }
 }
 

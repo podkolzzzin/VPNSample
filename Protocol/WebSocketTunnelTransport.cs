@@ -17,11 +17,32 @@ public static class WebSocketTunnelTransport
         string tlsServerName,
         string accessToken,
         X509Certificate2? pinnedCertificate = null,
+        CancellationToken cancellationToken = default) =>
+        await ConnectToPathAsync(
+            connectHost,
+            port,
+            tlsServerName,
+            accessToken,
+            Path,
+            pinnedCertificate,
+            headers: null,
+            cancellationToken);
+
+    public static async Task<WebSocketDuplexStream> ConnectToPathAsync(
+        string connectHost,
+        int port,
+        string tlsServerName,
+        string accessToken,
+        string path,
+        X509Certificate2? pinnedCertificate = null,
+        IReadOnlyDictionary<string, string>? headers = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectHost);
         ArgumentException.ThrowIfNullOrWhiteSpace(tlsServerName);
         ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
+        if (string.IsNullOrWhiteSpace(path) || path[0] != '/')
+            throw new ArgumentException("A WebSocket path must begin with '/'.", nameof(path));
 
         var handler = new SocketsHttpHandler
         {
@@ -51,8 +72,13 @@ public static class WebSocketTunnelTransport
         var http = new HttpMessageInvoker(handler, disposeHandler: true);
         var webSocket = new ClientWebSocket();
         webSocket.Options.SetRequestHeader("Authorization", $"Bearer {accessToken}");
+        if (headers is not null)
+        {
+            foreach ((string name, string value) in headers)
+                webSocket.Options.SetRequestHeader(name, value);
+        }
         webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
-        var uri = new UriBuilder("wss", tlsServerName, port, Path).Uri;
+        var uri = new UriBuilder("wss", tlsServerName, port, path).Uri;
 
         try
         {

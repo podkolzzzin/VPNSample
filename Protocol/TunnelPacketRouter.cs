@@ -258,7 +258,7 @@ public sealed class RoutedPacketEndpoint : IPacketEndpoint, IAsyncDisposable
     }
 }
 
-internal readonly record struct PacketAddresses(IPAddress Source, IPAddress Destination)
+public readonly record struct PacketAddresses(IPAddress Source, IPAddress Destination)
 {
     public static PacketAddresses Parse(ReadOnlySpan<byte> packet)
     {

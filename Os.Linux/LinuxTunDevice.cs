@@ -69,6 +69,9 @@ public sealed class LinuxTunDevice : IPacketEndpoint, IAsyncDisposable
             "addrgenmode", "none");
         await RunAsync("ip", "-6", "addr", "replace", options.Ipv6Address,
             "nodad", "dev", options.Name);
+        if (options.Mtu is not null)
+            await RunAsync("ip", "link", "set", "dev", options.Name,
+                "mtu", options.Mtu.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         await RunAsync("ip", "link", "set", options.Name, "up");
     }
 
@@ -130,4 +133,5 @@ public sealed class LinuxTunDevice : IPacketEndpoint, IAsyncDisposable
 public sealed record LinuxTunOptions(
     string Name,
     string Ipv4Address,
-    string Ipv6Address);
+    string Ipv6Address,
+    int? Mtu = null);

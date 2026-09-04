@@ -1,6 +1,7 @@
 .vpn-droplet.env
 .vpn-ssh-key
 .vpn-ssh-key.pub
+.vpn-mesh-key
 .idea/
 .agents/
 .codex/

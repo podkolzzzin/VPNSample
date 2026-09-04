@@ -4,6 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 REMOTE_CLIENT_SETUP=$SCRIPT_DIR/remote/configure-client.sh
+REMOTE_FULL_TUNNEL_CHECK=$SCRIPT_DIR/remote/check-full-tunnel-mesh.sh
 VPNSAMPLE_LOG_PREFIX=three-node-e2e
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -25,6 +26,9 @@ VPN_PROFILE=${VPN_PROFILE:-websocket-cover}
 VPN_DNS_ZONE=vpn
 CLIENT_A_NAME=${CLIENT_A_NAME:-nginx-node}
 CLIENT_B_NAME=${CLIENT_B_NAME:-requester-node}
+MESH_SOCKET_MARK=${MESH_SOCKET_MARK:-19795}
+MESH_ROUTE_TABLE=${MESH_ROUTE_TABLE:-51820}
+MESH_RULE_PRIORITY=${MESH_RULE_PRIORITY:-10000}
 
 usage() {
   cat <<'EOF'
@@ -59,6 +63,8 @@ fi
 need_all doctl dotnet ssh scp ssh-keygen
 [[ -f $REMOTE_CLIENT_SETUP ]] \
   || fail "Remote setup script not found: $REMOTE_CLIENT_SETUP"
+[[ -f $REMOTE_FULL_TUNNEL_CHECK ]] \
+  || fail "Remote full-tunnel check not found: $REMOTE_FULL_TUNNEL_CHECK"
 [[ $SERVER_REGION != "$CLIENT_A_REGION" \
   && $SERVER_REGION != "$CLIENT_B_REGION" \
   && $CLIENT_A_REGION != "$CLIENT_B_REGION" ]] \
@@ -168,5 +174,9 @@ log "Connecting client B second..."
 start_vpn_client "$client_b_ip" "$client_b_key" "$server_ip" "$CLIENT_B_NAME"
 wait_for_tunnel "$client_b_ip" "$client_b_key"
 configure_overlay_dns "$client_b_ip" "$client_b_key"
+
+log "Waiting for direct encrypted UDP paths between clients..."
+wait_for_direct_mesh "$client_a_ip" "$client_a_key" "$CLIENT_B_NAME"
+wait_for_direct_mesh "$client_b_ip" "$client_b_key" "$CLIENT_A_NAME"
 
 verify_three_node_topology

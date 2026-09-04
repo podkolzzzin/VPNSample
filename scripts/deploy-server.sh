@@ -128,11 +128,22 @@ ssh "${SSH_OPTIONS[@]}" "$remote" systemctl is-active --quiet vpnsample.service 
 
 cover_url="https://$VPN_TLS_SERVER_NAME:$VPN_PORT/"
 log "Verifying the HTTPS cover page at $cover_url..."
-curl --noproxy '*' --fail --silent --show-error \
-  --resolve "$VPN_TLS_SERVER_NAME:$VPN_PORT:$DROPLET_IP" \
-  --cacert "$tls_certificate_source" "$cover_url" \
-  | grep -Fq '<title>Two Cubes' \
-  || fail "The HTTPS cover page did not return the expected content."
+cover_ready=false
+for attempt in $(seq 1 20); do
+  if curl --noproxy '*' --fail --silent \
+      --resolve "$VPN_TLS_SERVER_NAME:$VPN_PORT:$DROPLET_IP" \
+      --cacert "$tls_certificate_source" "$cover_url" \
+      | grep -Fq '<title>Two Cubes'; then
+    cover_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ $cover_ready != true ]]; then
+  ssh "${SSH_OPTIONS[@]}" "$remote" \
+    'journalctl -u vpnsample.service --no-pager -n 100' || true
+  fail "The HTTPS cover page did not become ready within 20 seconds."
+fi
 probe_status=$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
   --resolve "$VPN_TLS_SERVER_NAME:$VPN_PORT:$DROPLET_IP" \
   --cacert "$tls_certificate_source" \
@@ -151,6 +162,6 @@ fi
   printf 'VPN_COVER_TOKEN=%q\n' "$VPN_COVER_TOKEN"
 } >>"$STATE_FILE"
 
-log "HTTPS cover site and protected WebSocket tunnel are listening on $DROPLET_IP:$VPN_PORT"
+log "HTTPS/WSS and UDP mesh rendezvous are listening on $DROPLET_IP:$VPN_PORT"
 log "Next: $PROJECT_ROOT/scripts/run-vpn.sh"
 log "After testing: $PROJECT_ROOT/scripts/create-droplet.sh --delete"

@@ -7,7 +7,7 @@ The executable files in this directory are intentionally thin workflows:
 | `create-droplet.sh` | Create or delete one state-file-owned DigitalOcean droplet |
 | `deploy-server.sh` | Publish and deploy the VPN server to that droplet |
 | `run-vpn.sh` | Run the local client and temporarily manage routes plus private DNS |
-| `e2e-three-node.sh` | Demonstrate three-region routing, DNS names, and nginx access |
+| `e2e-three-node.sh` | Demonstrate three-region direct mesh, fallback, DNS, and nginx access |
 | `checkout_next_tag.sh` | Move to the next tagged demo stage |
 | `checkout_prev_tag.sh` | Move to the previous tagged demo stage |
 
@@ -51,3 +51,13 @@ to compare pipeline behavior while retaining the WebSocket transport.
 server through `systemd-resolved`. The three-node E2E registers `nginx-node` and
 `requester-node`, verifies their A and AAAA answers, then requests nginx by DNS
 name rather than by an address.
+
+The final stage also opens one stable client UDP socket and uses TCP/443 for WSS
+coordination/relay plus UDP/443 for rendezvous and direct peer traffic. The E2E
+waits for authenticated direct paths before testing peer traffic and requires
+both clients to log direct encrypted packet send and receive. Traffic for DNS,
+the internet, or a peer without a live UDP path automatically stays on WSS. In
+full-tunnel mode `run-vpn.sh` also applies a socket-mark policy route so direct
+UDP continues over the physical network after `svpn0` becomes the default route.
+The three-node test exercises that policy on the requester and fetches nginx by
+name while the IPv4 full-tunnel route is active.
