@@ -16,8 +16,9 @@ The extensible foundation and the first transformation profile are implemented:
 - `IWireCodec` separates stream encoding from frame transformations.
 - `LengthPrefixedCodec` implements the baseline TCP wire format.
 - `TunnelHandshake` rejects protocol-version or profile mismatches.
-- `HttpsTunnelTransport` wraps the wire stream in TLS 1.2/1.3 and performs a
-  valid HTTP/1.1 Upgrade on `/vpn` before the VPN handshake.
+- `HttpsTunnelTransport` preserves the stage-04 custom HTTP Upgrade for comparison.
+- `WebSocketTunnelTransport` connects to a standard authenticated WSS endpoint,
+  while `WebSocketDuplexStream` keeps the pipeline on its existing `Stream` API.
 - `TunnelProfileFactory.Create` selects a named profile in one place; its
   `baseline` case composes tracing and pass-through stages.
 - `PacketShuffleStage` buffers up to three whole packets for at most 5 ms and
@@ -26,9 +27,13 @@ The extensible foundation and the first transformation profile are implemented:
   reassembles them on receipt.
 - `shuffle-split` composes tracing, packet shuffling, and fragmentation while
   leaving `baseline` available for comparison.
+- `PaddingStage` pads fragment payloads into configured size buckets.
+- `websocket-cover` composes shuffling, 240-byte fragmentation, and padding; the
+  server exposes it behind a normal cover page and returns `404` to probes that
+  do not carry the generated bearer token.
 
-Delays beyond the bounded shuffle window, dropping, padding, aggregation,
-alternative masking, and routing policies remain planned.
+Delays beyond the bounded shuffle window, dropping, aggregation, alternative
+transports, and routing policies remain planned.
 
 ```text
 TUN
@@ -37,13 +42,13 @@ TUN
 Packet pipeline          filtering, delaying, reordering
  |
  v
-Tunnel-frame pipeline    fragmentation, padding, aggregation
+Tunnel-frame pipeline    fragmentation and padding
  |
  v
 Wire codec               plain framing or HTTP-like encoding
  |
 v
-HTTPS transport (TLS + HTTP Upgrade on TCP/443)
+WSS transport            TLS + standard WebSocket on TCP/443
 ```
 
 ## Tunnel stages
@@ -78,7 +83,8 @@ await using var pipeline = new TunnelPipelineBuilder(
         new LengthPrefixedCodec())
     .Use(new PacketTraceStage("client"))
     .Use(new PacketShuffleStage(windowSize: 3, TimeSpan.FromMilliseconds(5)))
-    .Use(new FragmentStage(maximumFragmentLength: 256))
+    .Use(new FragmentStage(maximumFragmentLength: 240))
+    .Use(new PaddingStage(64, 128, 256, 512, 1024, 1440))
     .Build();
 
 await pipeline.RunAsync(tun, transport);
@@ -93,7 +99,7 @@ Each new demonstration becomes one class plus one registration line.
 | Packet delay, dropping, or reordering | `ITunnelStage` |
 | Tunnel-frame splitting and reassembly | `ITunnelStage` with packet IDs and fragment indexes |
 | Padding or aggregation | `ITunnelStage` |
-| HTTPS wrapping | `HttpsTunnelTransport` (implemented) |
+| HTTPS/WebSocket wrapping | `WebSocketTunnelTransport` (implemented) |
 | Alternative HTTP-like masking | `IWireCodec` or a transport decorator |
 | TCP versus UDP transport | `ITunnelTransport` Strategy |
 | Split tunneling | `IRoutingPolicy`, outside the protocol pipeline |
@@ -128,12 +134,15 @@ Protocol/
     PassThroughStage.cs
     FragmentStage.cs
     PacketShuffleStage.cs
-    # Future: DelayStage.cs, PaddingStage.cs
+    PaddingStage.cs
+    # Future: DelayStage.cs
   Codecs/
     LengthPrefixedCodec.cs
     # Future: HttpLikeCodec.cs
   Profiles/
     TunnelProfileFactory.cs
+  WebSocketTunnelTransport.cs
+  WebSocketDuplexStream.cs
 
 Os.Linux/
   Routing/

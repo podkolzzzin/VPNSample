@@ -8,15 +8,16 @@ routes client-to-client packets in .NET.
 Current architecture, deployment flow, and IPv4/IPv6 routing diagrams are in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-The wire transport uses TLS 1.2/1.3 plus an HTTP/1.1 Upgrade at
-`https://vpn.twocubes.io/vpn`. The automated demo pins a temporary certificate,
-but clients do not authenticate themselves to the server yet. This remains a
-learning project rather than a production VPN.
+The current transport is a standard RFC 6455 WebSocket at
+`wss://vpn.twocubes.io/api/v1/events`. The same HTTPS endpoint serves an ordinary
+HTML page at `/`; requests without the generated bearer token receive a normal
+`404`. The automated demo pins a temporary certificate. The token prevents
+unauthenticated probing but is not a full client identity system, so this remains
+a learning project rather than a production VPN.
 
-The default `shuffle-split` profile adds two visible pipeline stages: it
-reorders windows of up to three IP packets and splits each packet into tunnel
-fragments of at most 256 bytes. Set `VPN_PROFILE=baseline` on both peers to
-compare it with the unmodified packet flow.
+The default `websocket-cover` profile reorders windows of up to three IP packets,
+splits each into fragments of at most 240 bytes, and pads frames into size buckets.
+The earlier `shuffle-split` and no-tricks `baseline` profiles remain available.
 
 ## Requirements
 
@@ -34,7 +35,7 @@ From this directory:
 dotnet build VPNSample.slnx
 ```
 
-This commit is the fifth demo stage, `stage-05-packet-shuffle-split`.
+This commit is the sixth demo stage, `stage-06-websocket-cover`.
 
 Move through the tagged demo stages from any checked-out stage:
 
@@ -66,12 +67,14 @@ public key in DigitalOcean, and records the temporary resources in
 `.vpn-droplet.env`. Use `--ssh-key-id` together with `--ssh-key` only when you
 explicitly want to supply an existing key. `deploy-server.sh` publishes the
 server, installs .NET 10 on the IPv6-enabled droplet, configures IPv4/IPv6
-forwarding and NAT, creates a seven-day certificate for `vpn.twocubes.io`, and
-starts `vpnsample.service`. The public certificate is recorded in the state file
-and pinned by `run-vpn.sh`; its private key exists only on the server.
+forwarding and NAT, creates a seven-day certificate and random WebSocket token,
+and starts `vpnsample.service`. The public certificate and token are recorded in
+the state file; the private key exists only on the server. Deployment verifies
+that `/` returns the cover page and an unauthenticated tunnel probe returns `404`.
 
-The temporary flow connects to the droplet IP while sending `vpn.twocubes.io`
-as TLS SNI and HTTP `Host`, so it does not require a DNS change. For a permanent
+The temporary flow connects to the droplet IP while using `vpn.twocubes.io` as
+the WebSocket URI, TLS SNI, and HTTP `Host`, so it does not require a DNS change.
+For a permanent
 deployment, point the `vpn.twocubes.io` A/AAAA records at the server, issue a
 publicly trusted certificate, and provide its PEM files to `deploy-server.sh`:
 
@@ -81,10 +84,12 @@ VPN_TLS_PRIVATE_KEY=/path/to/privkey.pem \
 ./scripts/deploy-server.sh
 ```
 
-This leaves the existing `twocubes.io` website untouched. On the wire the
-outer connection is real TLS on TCP/443; the tunnel frames and HTTP Upgrade are
-encrypted. A network observer can still see the destination IP and normally the
-TLS SNI, so the DNS record and server address should agree in a permanent setup.
+The server itself returns a small cover site at `/`. To preserve a different
+existing site, put this service behind its reverse proxy and forward only
+`/api/v1/events`. On the wire the outer connection is real TLS plus a standard
+WebSocket on TCP/443. A network observer can still see the destination IP and
+normally the TLS SNI, so the DNS record and server address should agree in a
+permanent setup.
 
 By default, `run-vpn.sh` replaces the local IPv4 and IPv6 default routes while the
 client is running and restores them on exit. Use `--peer-only` to create and test
@@ -111,7 +116,7 @@ To reproduce the server plus two-client test in three DigitalOcean regions:
 
 The script creates a VPN server in Amsterdam, an nginx client in Frankfurt,
 and a requester client in New York. It verifies bidirectional IPv4 and IPv6
-ping, confirms TLS plus HTTP Upgrade on both clients, checks internet
+ping, confirms TLS plus WebSocket on both clients, checks internet
 reachability through the exit node, fetches nginx over both
 tunnel address families, checks nginx's access log for the requester's overlay
 addresses, and deletes all temporary resources on exit. The regions and droplet
@@ -132,6 +137,7 @@ sudo env \
   VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   VPN_TLS_CERTIFICATE=/path/to/fullchain.pem \
   VPN_TLS_PRIVATE_KEY=/path/to/privkey.pem \
+  VPN_COVER_TOKEN=0123456789abcdef0123456789abcdef \
   dotnet run --project Server -- 443
 ```
 
@@ -143,6 +149,7 @@ Connect using the server address:
 sudo env \
   VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   VPN_TLS_PINNED_CERTIFICATE=/path/to/server.crt \
+  VPN_COVER_TOKEN=0123456789abcdef0123456789abcdef \
   dotnet run --project Client -- SERVER_IP 443
 ```
 
@@ -201,20 +208,23 @@ For direct `dotnet run` commands, preserve the setting across `sudo` explicitly:
 ```bash
 sudo env VPN_TRACE_PACKETS=1 VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   VPN_TLS_CERTIFICATE=/path/to/fullchain.pem VPN_TLS_PRIVATE_KEY=/path/to/privkey.pem \
+  VPN_COVER_TOKEN=0123456789abcdef0123456789abcdef \
   dotnet run --project Server -- 443
 sudo env VPN_TRACE_PACKETS=1 VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   VPN_TLS_PINNED_CERTIFICATE=/path/to/server.crt \
+  VPN_COVER_TOKEN=0123456789abcdef0123456789abcdef \
   dotnet run --project Client -- SERVER_IP 443
 ```
 
-The core architecture provides two profiles. `baseline` traces and forwards
-each packet unchanged. The default `shuffle-split` profile additionally buffers
-up to three packets for at most 5 ms, changes their order, and splits each into
-256-byte tunnel frames. Both peers must select the same profile:
+The core architecture provides three profiles. `baseline` traces and forwards
+each packet unchanged. `shuffle-split` additionally buffers up to three packets
+for at most 5 ms, changes their order, and splits each into 256-byte tunnel
+frames. The default `websocket-cover` uses 240-byte fragments and pads them to
+64, 128, 256, 512, 1024, or 1440 bytes. Both peers must select the same profile:
 
 ```bash
-VPN_PROFILE=shuffle-split ./scripts/deploy-server.sh
-VPN_PROFILE=shuffle-split ./scripts/run-vpn.sh
+VPN_PROFILE=websocket-cover ./scripts/deploy-server.sh
+VPN_PROFILE=websocket-cover ./scripts/run-vpn.sh
 ```
 
 Packet splitting here is explicit tunnel-frame fragmentation, not a sequence of
@@ -262,8 +272,8 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
 
 ## How the code is split
 
-- `Client/Program.cs` and `Server/Program.cs` open a TCP connection, create a TUN
-  endpoint, select a named profile, and run its tunnel pipeline.
+- `Client/Program.cs` and `Server/Program.cs` establish an authenticated WSS
+  connection, create a TUN endpoint, select a named profile, and run its pipeline.
 - `Protocol/IPacketEndpoint.cs` is the OS-neutral boundary consumed by the protocol.
 - `Protocol/TunnelNetwork.cs` contains the tunnel port, networks, interface names,
   prefix lengths, and address assignment rule.
@@ -272,11 +282,15 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
 - `Protocol/TunnelFrame.cs` provides stable packet and fragment metadata.
 - `Protocol/Codecs/LengthPrefixedCodec.cs` owns the baseline wire format behind
   the `IWireCodec` strategy boundary.
-- `Protocol/Profiles/TunnelProfileFactory.cs` composes the `baseline` and
-  `shuffle-split` demonstration profiles.
+- `Protocol/Profiles/TunnelProfileFactory.cs` composes the `baseline`,
+  `shuffle-split`, and `websocket-cover` demonstration profiles.
 - `Protocol/Stages/PacketShuffleStage.cs` reorders small outbound packet windows
   and flushes sparse traffic after a short bounded delay.
 - `Protocol/Stages/FragmentStage.cs` splits and reassembles tunnel frames.
+- `Protocol/Stages/PaddingStage.cs` hides exact fragment lengths behind buckets.
+- `Protocol/WebSocketTunnelTransport.cs` creates the pinned, authenticated WSS
+  client while `WebSocketDuplexStream.cs` adapts WebSocket messages to the
+  pipeline's existing `Stream` boundary.
 - `Protocol/Stages/PacketTraceStage.cs`, `PacketTrace.cs`,
   `IpPacketFormatter.cs`, and `PcapWriter.cs` implement packet observation
   independently of framing and transport orchestration.

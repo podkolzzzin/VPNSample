@@ -15,7 +15,8 @@ VPN_ROUTE_METRIC=${VPN_ROUTE_METRIC:-50}
 VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
-VPN_PROFILE=${VPN_PROFILE:-shuffle-split}
+VPN_PROFILE=${VPN_PROFILE:-websocket-cover}
+VPN_COVER_TOKEN=${VPN_COVER_TOKEN:-}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-}
 VPN_TLS_PINNED_CERTIFICATE=${VPN_TLS_PINNED_CERTIFICATE:-}
 peer_only=false
@@ -39,7 +40,8 @@ Environment:
   VPN_TRACE_PACKETS  Set to 1 for compact packet summaries
   VPN_TRACE_HEX      Set to 1 to add a multiline hexadecimal dump
   VPN_TRACE_PCAP     Base path for a Wireshark-compatible capture
-  VPN_PROFILE        Tunnel pipeline profile (default: shuffle-split)
+  VPN_PROFILE        Tunnel pipeline profile (default: websocket-cover)
+  VPN_COVER_TOKEN    WebSocket access token (state file default)
   VPN_TLS_SERVER_NAME  HTTPS SNI/Host name (state file default: vpn.twocubes.io)
   VPN_TLS_PINNED_CERTIFICATE  Optional pinned server certificate
 EOF
@@ -60,12 +62,14 @@ load_state "$STATE_FILE"
 : "${DROPLET_IP:?DROPLET_IP is missing from $STATE_FILE}"
 VPN_PORT=${VPN_PORT:-443}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
+: "${VPN_COVER_TOKEN:?VPN_COVER_TOKEN is missing from $STATE_FILE}"
 [[ $VPN_ROUTE_METRIC =~ ^[0-9]+$ ]] && ((VPN_ROUTE_METRIC >= 1 && VPN_ROUTE_METRIC <= 4294967295)) \
   || fail "VPN_ROUTE_METRIC must be an integer from 1 to 4294967295."
 validate_port "$VPN_PORT"
 validate_boolean VPN_TRACE_PACKETS "$VPN_TRACE_PACKETS"
 validate_boolean VPN_TRACE_HEX "$VPN_TRACE_HEX"
 validate_profile "$VPN_PROFILE"
+validate_cover_token "$VPN_COVER_TOKEN"
 
 if ((EUID != 0)); then
   need sudo
@@ -84,6 +88,7 @@ if ((EUID != 0)); then
     "VPN_TRACE_HEX=$VPN_TRACE_HEX" \
     "VPN_TRACE_PCAP=$VPN_TRACE_PCAP" \
     "VPN_PROFILE=$VPN_PROFILE" \
+    "VPN_COVER_TOKEN=$VPN_COVER_TOKEN" \
     "VPN_TLS_SERVER_NAME=$VPN_TLS_SERVER_NAME" \
     "VPN_TLS_PINNED_CERTIFICATE=$VPN_TLS_PINNED_CERTIFICATE" \
     "$0" "${sudo_args[@]}"
@@ -122,10 +127,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-log "Connecting to https://$VPN_TLS_SERVER_NAME:$VPN_PORT/vpn using profile '$VPN_PROFILE'..."
+log "Connecting to wss://$VPN_TLS_SERVER_NAME:$VPN_PORT/api/v1/events using profile '$VPN_PROFILE'..."
 env \
   "VPN_TLS_SERVER_NAME=$VPN_TLS_SERVER_NAME" \
   "VPN_TLS_PINNED_CERTIFICATE=$VPN_TLS_PINNED_CERTIFICATE" \
+  "VPN_COVER_TOKEN=$VPN_COVER_TOKEN" \
   "$dotnet_bin" "$CLIENT_DLL" "$DROPLET_IP" "$VPN_PORT" &
 client_pid=$!
 

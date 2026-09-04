@@ -16,7 +16,8 @@ SSH_KNOWN_HOSTS_FILE=${SSH_KNOWN_HOSTS_FILE:-}
 VPN_TRACE_PACKETS=${VPN_TRACE_PACKETS:-0}
 VPN_TRACE_HEX=${VPN_TRACE_HEX:-0}
 VPN_TRACE_PCAP=${VPN_TRACE_PCAP:-}
-VPN_PROFILE=${VPN_PROFILE:-shuffle-split}
+VPN_PROFILE=${VPN_PROFILE:-websocket-cover}
+VPN_COVER_TOKEN=${VPN_COVER_TOKEN:-}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
 VPN_TLS_CERTIFICATE=${VPN_TLS_CERTIFICATE:-}
 VPN_TLS_PRIVATE_KEY=${VPN_TLS_PRIVATE_KEY:-}
@@ -30,10 +31,12 @@ Publish the VPN server, install its runtime and networking prerequisites on the
 recorded droplet, and start it as vpnsample.service.
 
 Environment: VPN_STATE_FILE, SSH_USER (default: root), VPN_TRACE_PACKETS,
-VPN_TRACE_HEX, VPN_TRACE_PCAP, VPN_PROFILE (default: shuffle-split), and optional
+VPN_TRACE_HEX, VPN_TRACE_PCAP, VPN_PROFILE (default: websocket-cover), and optional
 SSH_KNOWN_HOSTS_FILE. HTTPS uses VPN_TLS_SERVER_NAME (default:
 vpn.twocubes.io). Set both VPN_TLS_CERTIFICATE and VPN_TLS_PRIVATE_KEY to deploy
 an existing PEM certificate; otherwise a temporary pinned certificate is made.
+VPN_COVER_TOKEN can provide a stable WebSocket access token; otherwise one is
+generated and saved in the state file.
 EOF
 }
 
@@ -45,7 +48,7 @@ while (($#)); do
   esac
 done
 
-need_all dotnet ssh scp openssl
+need_all curl dotnet ssh scp openssl
 [[ -f $SERVER_PROJECT ]] || fail "Server project not found: $SERVER_PROJECT"
 [[ -f $REMOTE_SERVER_SETUP ]] || fail "Remote setup script not found: $REMOTE_SERVER_SETUP"
 load_state "$STATE_FILE"
@@ -59,6 +62,10 @@ validate_boolean VPN_TRACE_HEX "$VPN_TRACE_HEX"
 [[ $VPN_TRACE_PCAP != *[[:space:]]* ]] \
   || fail "VPN_TRACE_PCAP must not contain whitespace."
 validate_profile "$VPN_PROFILE"
+if [[ -z $VPN_COVER_TOKEN ]]; then
+  VPN_COVER_TOKEN=$(openssl rand -hex 24)
+fi
+validate_cover_token "$VPN_COVER_TOKEN"
 validate_dns_name "$VPN_TLS_SERVER_NAME"
 [[ -z $VPN_TLS_CERTIFICATE && -z $VPN_TLS_PRIVATE_KEY \
   || -n $VPN_TLS_CERTIFICATE && -n $VPN_TLS_PRIVATE_KEY ]] \
@@ -113,10 +120,25 @@ log "Installing .NET 10 and configuring forwarding, NAT, and systemd..."
 ssh "${SSH_OPTIONS[@]}" "$remote" bash -s -- \
   "$VPN_PORT" "$ipv4_network" "$ipv6_network" "$VPN_TRACE_PACKETS" \
   "$VPN_TRACE_HEX" "${VPN_TRACE_PCAP:--}" "$VPN_PROFILE" "$VPN_TLS_SERVER_NAME" \
+  "$VPN_COVER_TOKEN" \
   <"$REMOTE_SERVER_SETUP"
 
 ssh "${SSH_OPTIONS[@]}" "$remote" systemctl is-active --quiet vpnsample.service \
   || fail "Server did not start. Inspect: ssh $remote journalctl -u vpnsample"
+
+cover_url="https://$VPN_TLS_SERVER_NAME:$VPN_PORT/"
+log "Verifying the HTTPS cover page at $cover_url..."
+curl --noproxy '*' --fail --silent --show-error \
+  --resolve "$VPN_TLS_SERVER_NAME:$VPN_PORT:$DROPLET_IP" \
+  --cacert "$tls_certificate_source" "$cover_url" \
+  | grep -Fq '<title>Two Cubes' \
+  || fail "The HTTPS cover page did not return the expected content."
+probe_status=$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+  --resolve "$VPN_TLS_SERVER_NAME:$VPN_PORT:$DROPLET_IP" \
+  --cacert "$tls_certificate_source" \
+  "https://$VPN_TLS_SERVER_NAME:$VPN_PORT/api/v1/events")
+[[ $probe_status == 404 ]] \
+  || fail "The unauthenticated tunnel probe returned HTTP $probe_status instead of 404."
 
 if [[ $managed_tls_certificate == true ]]; then
   VPN_TLS_PINNED_CERTIFICATE=${STATE_FILE}.tls.crt
@@ -126,8 +148,9 @@ fi
   printf 'VPN_TLS_SERVER_NAME=%q\n' "$VPN_TLS_SERVER_NAME"
   printf 'VPN_TLS_PINNED_CERTIFICATE=%q\n' "$VPN_TLS_PINNED_CERTIFICATE"
   printf 'MANAGED_TLS_CERTIFICATE=%q\n' "$managed_tls_certificate"
+  printf 'VPN_COVER_TOKEN=%q\n' "$VPN_COVER_TOKEN"
 } >>"$STATE_FILE"
 
-log "HTTPS tunnel is listening on $DROPLET_IP:$VPN_PORT as $VPN_TLS_SERVER_NAME"
+log "HTTPS cover site and protected WebSocket tunnel are listening on $DROPLET_IP:$VPN_PORT"
 log "Next: $PROJECT_ROOT/scripts/run-vpn.sh"
 log "After testing: $PROJECT_ROOT/scripts/create-droplet.sh --delete"

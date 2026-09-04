@@ -37,6 +37,8 @@ public sealed class TunnelPipelineTests
     {
         Assert.True(TunnelProfileFactory.IsSupported(
             TunnelProfileFactory.ShuffleSplitProfileName));
+        Assert.True(TunnelProfileFactory.IsSupported(
+            TunnelProfileFactory.WebSocketCoverProfileName));
         Assert.False(TunnelProfileFactory.IsSupported("unknown"));
         Assert.Throws<ArgumentException>(() => TunnelProfileFactory.Create("unknown", "test"));
     }

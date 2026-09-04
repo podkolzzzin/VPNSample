@@ -26,6 +26,7 @@ trap 'rm -f -- "$state_file"' EXIT
 printf 'SAMPLE_VALUE=%q\n' 'value with spaces' >"$state_file"
 assert_equal 'value with spaces' "$(state_value "$state_file" SAMPLE_VALUE)" \
   'state_value'
+validate_cover_token 0123456789abcdef0123456789abcdef
 
 ssh_options_for /tmp/test-key /tmp/test-known-hosts
 assert_equal /tmp/test-key "${SSH_OPTIONS[1]}" 'SSH identity path'

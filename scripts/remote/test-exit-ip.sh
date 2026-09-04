@@ -16,7 +16,8 @@ dotnet_bin=$5
 client_dll=$6
 tls_server_name=$7
 pinned_certificate=${8:-}
-profile=${9:-shuffle-split}
+profile=${9:-websocket-cover}
+cover_token=${10:?Missing WebSocket access token}
 route_metric=50
 client_log=${status_file%/*}/vpn-client.log
 client_pid=
@@ -113,10 +114,11 @@ vpn_routes_capture "$server_ipv4"
 read -r server_tunnel_v4 server_tunnel_v6 \
   < <("$dotnet_bin" "$client_dll" --print-server-addresses)
 
-log "Connecting the probe to https://$tls_server_name:$vpn_port/vpn..."
+log "Connecting the probe to wss://$tls_server_name:$vpn_port/api/v1/events..."
 env VPN_TLS_SERVER_NAME="$tls_server_name" \
   VPN_TLS_PINNED_CERTIFICATE="$pinned_certificate" \
   VPN_PROFILE="$profile" \
+  VPN_COVER_TOKEN="$cover_token" \
   "$dotnet_bin" "$client_dll" "$server_ipv4" "$vpn_port" >"$client_log" 2>&1 &
 client_pid=$!
 

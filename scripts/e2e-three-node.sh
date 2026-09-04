@@ -21,7 +21,7 @@ SERVER_REGION=${SERVER_REGION:-ams3}
 CLIENT_A_REGION=${CLIENT_A_REGION:-fra1}
 CLIENT_B_REGION=${CLIENT_B_REGION:-nyc3}
 DO_SIZE=${DO_SIZE:-s-1vcpu-1gb}
-VPN_PROFILE=${VPN_PROFILE:-shuffle-split}
+VPN_PROFILE=${VPN_PROFILE:-websocket-cover}
 
 usage() {
   cat <<'EOF'
@@ -37,7 +37,7 @@ Environment:
   CLIENT_A_REGION  nginx client region (default: fra1)
   CLIENT_B_REGION  requester client region (default: nyc3)
   DO_SIZE          Droplet size (default: s-1vcpu-1gb)
-  VPN_PROFILE      Tunnel pipeline profile (default: shuffle-split)
+  VPN_PROFILE      Tunnel pipeline profile (default: websocket-cover)
 
 Prerequisites: authenticated doctl, dotnet 10, ssh, scp, and ssh-keygen.
 This test creates billable DigitalOcean resources for the duration of the run.
@@ -129,8 +129,10 @@ VPN_STATE_FILE=$server_state VPN_PROFILE=$VPN_PROFILE \
 vpn_port=$(state_value "$server_state" VPN_PORT)
 tls_server_name=$(state_value "$server_state" VPN_TLS_SERVER_NAME)
 tls_pinned_certificate=$(state_value "$server_state" VPN_TLS_PINNED_CERTIFICATE)
+cover_token=$(state_value "$server_state" VPN_COVER_TOKEN)
 [[ -f $tls_pinned_certificate ]] \
   || fail "Pinned TLS certificate was not created: $tls_pinned_certificate"
+validate_cover_token "$cover_token"
 
 log "Publishing current VPN client..."
 dotnet publish "$PROJECT_ROOT/Client/Client.csproj" -c Release --no-self-contained \

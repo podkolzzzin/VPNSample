@@ -8,19 +8,28 @@ trace_packets=$4
 trace_hex=$5
 trace_pcap=${6-}
 [[ $trace_pcap == - ]] && trace_pcap=
-profile=${7-shuffle-split}
+profile=${7-websocket-cover}
 tls_server_name=$8
+cover_token=$9
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl iproute2 iptables iputils-ping >/dev/null
 
 dotnet_dir=/opt/vpnsample/dotnet
-if ! "$dotnet_dir/dotnet" --list-runtimes 2>/dev/null | grep -q '^Microsoft.NETCore.App 10\.'; then
+runtime_list=$($dotnet_dir/dotnet --list-runtimes 2>/dev/null || true)
+if [[ $runtime_list != *'Microsoft.NETCore.App 10.'* \
+  || $runtime_list != *'Microsoft.AspNetCore.App 10.'* ]]; then
   mkdir -p "$dotnet_dir"
   curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/vpnsample-dotnet-install.sh
-  bash /tmp/vpnsample-dotnet-install.sh --channel 10.0 --runtime dotnet \
-    --install-dir "$dotnet_dir" >/dev/null
+  if [[ $runtime_list != *'Microsoft.NETCore.App 10.'* ]]; then
+    bash /tmp/vpnsample-dotnet-install.sh --channel 10.0 --runtime dotnet \
+      --install-dir "$dotnet_dir" >/dev/null
+  fi
+  if [[ $runtime_list != *'Microsoft.AspNetCore.App 10.'* ]]; then
+    bash /tmp/vpnsample-dotnet-install.sh --channel 10.0 --runtime aspnetcore \
+      --install-dir "$dotnet_dir" >/dev/null
+  fi
   rm -f /tmp/vpnsample-dotnet-install.sh
 fi
 
@@ -30,10 +39,11 @@ test -n "$out_interface"
 ip -6 route show default | grep -q .
 ip -6 address show dev "$out_interface" scope global | grep -q 'inet6 '
 
-printf 'VPN_OUT_INTERFACE=%s\nVPN_PORT=%s\nVPN_IPV4_NETWORK=%s\nVPN_IPV6_NETWORK=%s\nVPN_TRACE_PACKETS=%s\nVPN_TRACE_HEX=%s\nVPN_TRACE_PCAP=%s\nVPN_PROFILE=%s\nVPN_TLS_SERVER_NAME=%s\nVPN_TLS_CERTIFICATE=/etc/vpnsample/tls.crt\nVPN_TLS_PRIVATE_KEY=/etc/vpnsample/tls.key\n' \
+printf 'VPN_OUT_INTERFACE=%s\nVPN_PORT=%s\nVPN_IPV4_NETWORK=%s\nVPN_IPV6_NETWORK=%s\nVPN_TRACE_PACKETS=%s\nVPN_TRACE_HEX=%s\nVPN_TRACE_PCAP=%s\nVPN_PROFILE=%s\nVPN_TLS_SERVER_NAME=%s\nVPN_TLS_CERTIFICATE=/etc/vpnsample/tls.crt\nVPN_TLS_PRIVATE_KEY=/etc/vpnsample/tls.key\nVPN_COVER_TOKEN=%s\n' \
   "$out_interface" "$port" "$ipv4_network" "$ipv6_network" "$trace_packets" \
-  "$trace_hex" "$trace_pcap" "$profile" "$tls_server_name" \
+  "$trace_hex" "$trace_pcap" "$profile" "$tls_server_name" "$cover_token" \
   >/etc/default/vpnsample
+chmod 600 /etc/default/vpnsample
 
 cat >/etc/systemd/system/vpnsample.service <<'UNIT'
 [Unit]

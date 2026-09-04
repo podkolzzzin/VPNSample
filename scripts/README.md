@@ -42,6 +42,7 @@ The full disposable integration test is:
 ```
 
 The current stage defaults deployment and client scripts to the
-`shuffle-split` pipeline profile. Set `VPN_PROFILE=baseline` consistently for
-both sides when demonstrating the same HTTPS transport without packet
-reordering or tunnel-frame fragmentation.
+`websocket-cover` profile. Deployment generates `VPN_COVER_TOKEN`, stores it in
+the selected state file, and supplies it to clients without logging it. Set
+`VPN_PROFILE=shuffle-split` or `VPN_PROFILE=baseline` consistently on both sides
+to compare pipeline behavior while retaining the WebSocket transport.

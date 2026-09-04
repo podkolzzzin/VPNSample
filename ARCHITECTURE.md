@@ -11,8 +11,8 @@ flowchart LR
         Route[Linux routing]
         CTun[svpn0<br/>10.8.0.X/24 / fd42:8::X/64]
         CLinux[LinuxTunDevice]
-        CProtocol[TunnelPipeline<br/>shuffle-split profile]
-        CTcp[SslStream<br/>HTTPS Upgrade]
+        CProtocol[TunnelPipeline<br/>websocket-cover profile]
+        CTcp[ClientWebSocket<br/>WSS]
 
         App <--> Route
         Route <--> CTun
@@ -24,8 +24,8 @@ flowchart LR
     CTcp <-->|TLS over TCP/443| STcp
 
     subgraph Droplet[DigitalOcean Ubuntu droplet]
-        STcp[SslStream<br/>HTTPS Upgrade]
-        SProtocol[TunnelPipeline per connection<br/>shuffle-split profile]
+        STcp[Kestrel WebSocket<br/>WSS + cover page]
+        SProtocol[TunnelPipeline per connection<br/>websocket-cover profile]
         Router[TunnelPacketRouter<br/>overlay IP → connection]
         SLinux[LinuxTunDevice]
         STun[one svpn0<br/>10.8.0.1/24 / fd42:8::1/64]
@@ -47,10 +47,13 @@ flowchart LR
 Сервер передає номер `N` одним байтом перед першим кадром, а клієнт отримує host
 `N + 2` у спільних мережах `10.8.0.0/24` і `fd42:8::/64`. `TunnelPacketRouter`
 пересилає overlay-пакети безпосередньо у connection адресата, а internet traffic
-передає у серверний TUN для Linux forwarding і NAT. Wire traffic шифрується TLS;
-сервер автентифікується сертифікатом, але client authentication ще немає.
+передає у серверний TUN для Linux forwarding і NAT. Wire traffic і bearer token
+шифруються TLS; сервер автентифікується сертифікатом, а token відсікає випадкові
+та active-probe запити, хоча ще не є повноцінною client identity.
 Тимчасова автоматизація підключається до IP droplet напряму, передає
-`vpn.twocubes.io` як SNI/Host і перевіряє exact certificate pin. Для постійного
+`vpn.twocubes.io` як WebSocket URI та SNI/Host і перевіряє exact certificate pin.
+Kestrel віддає звичайну HTML-сторінку на `/`, а прихований endpoint без коректного
+token повертає `404`. Для постійного
 deployment DNS `vpn.twocubes.io` має вказувати на сервер, а сертифікат має бути
 виданий довіреним CA.
 
@@ -78,8 +81,8 @@ flowchart TB
 |---|---|---|
 | `VpnSample.Protocol` | Межа `IPacketEndpoint`, pipeline стадій, wire codec, handshake, packet router і таблиця overlay IP → connection | `/dev/net/tun`, системні маршрути, DigitalOcean |
 | `VpnSample.Os.Linux` | Створення TUN, адреси інтерфейсу, незалежні потоки читання/запису | TCP, сервер, формат розгортання |
-| `VpnSample.Client` | TCP-підключення, композиція протоколу з Linux endpoint | Налаштування cloud-сервера |
-| `VpnSample.Server` | Один exit-node TUN, TCP listener, реєстрація peers і композиція router/pipeline | Клієнтські default routes |
+| `VpnSample.Client` | WSS-підключення, композиція протоколу з Linux endpoint | Налаштування cloud-сервера |
+| `VpnSample.Server` | HTTPS cover site, WSS endpoint, один exit-node TUN і композиція router/pipeline | Клієнтські default routes |
 | `scripts/` | Життєвий цикл droplet, deployment, системні маршрути та перевірки | Внутрішній фреймінг пакетів |
 
 Таким чином, OS-level VPN відділений від protocol-level VPN на межі `IPacketEndpoint`. Протокол працює зі `Stream` і не викликає Linux API напряму.
@@ -91,9 +94,11 @@ flowchart TB
 `RoutedPacketEndpoint`. Outbound-стадії
 виконуються в порядку реєстрації, а inbound-стадії — у зворотному порядку. Це
 дозволяє кодувати кадр на клієнті й симетрично декодувати його на сервері.
-`baseline` містить tracing і pass-through. Стандартний `shuffle-split` додає
+`baseline` містить tracing і pass-through. `shuffle-split` додає
 перестановку вікон до трьох IP-пакетів із flush через 5 ms, а потім ділить
-кожен пакет на tunnel fragments розміром до 256 байтів.
+кожен пакет на tunnel fragments розміром до 256 байтів. Стандартний
+`websocket-cover` використовує фрагменти до 240 байтів і `PaddingStage`, який
+доповнює їх випадковими байтами до одного з фіксованих size buckets.
 
 ```mermaid
 flowchart LR
@@ -101,11 +106,13 @@ flowchart LR
     Frame --> TraceOut[PacketTraceStage]
     TraceOut --> Shuffle[PacketShuffleStage]
     Shuffle --> Fragment[FragmentStage]
-    Fragment --> Codec[LengthPrefixedCodec]
-    Codec --> TcpWrite[SslStream]
+    Fragment --> Pad[PaddingStage]
+    Pad --> Codec[LengthPrefixedCodec]
+    Codec --> TcpWrite[WebSocketDuplexStream]
 
-    TcpRead[SslStream] --> Decode[LengthPrefixedCodec]
-    Decode --> Reassemble[FragmentStage reassembly]
+    TcpRead[WebSocketDuplexStream] --> Decode[LengthPrefixedCodec]
+    Decode --> Unpad[PaddingStage]
+    Unpad --> Reassemble[FragmentStage reassembly]
     Reassemble --> TraceIn[PacketTraceStage]
     TraceIn --> TunWrite[TUN PacketWriter]
 ```
@@ -126,8 +133,10 @@ flowchart LR
 ```
 
 У `baseline` кожен пакет має `fragmentIndex = 0` і `fragmentCount = 1`. У
-`shuffle-split` `FragmentStage` створює кілька кадрів зі спільним `packet ID`, а
-на приймальній стороні перевіряє індекси та загальний розмір перед reassembly.
+`shuffle-split` і `websocket-cover` створюють кілька кадрів зі спільним
+`packet ID`; на приймальній стороні `FragmentStage` перевіряє індекси та
+загальний розмір перед reassembly. У `websocket-cover` поле payload додатково
+містить original-length prefix і випадковий padding до bucket size.
 
 ## Послідовність розгортання і запуску
 
@@ -151,6 +160,8 @@ sequenceDiagram
     Deploy->>Host: Publish, copy, install .NET та service
     Deploy->>Host: Увімкнути IPv4/IPv6 forwarding
     Deploy->>Host: Додати NAT44 і NAT66
+    Deploy->>Deploy: Згенерувати bearer token
+    Deploy->>Host: Перевірити cover page і probe → 404
 
     User->>Run: Запустити локальний VPN
     Run->>Run: Зберегти наявні routes
@@ -158,14 +169,14 @@ sequenceDiagram
     Run->>Client: Запустити з sudo
     Client->>Host: TCP connect
     Client->>Host: TLS 1.2/1.3, SNI vpn.twocubes.io, ALPN http/1.1
-    Client->>Host: GET /vpn + HTTP Upgrade
+    Client->>Host: GET /api/v1/events + WebSocket Upgrade + bearer token
     Host-->>Client: 101 Switching Protocols
     Host->>Host: Створити один exit-node svpn0 під час старту
     Host-->>Client: Номер клієнта N
     Host->>Host: Зареєструвати IP клієнта у TunnelPacketRouter
     Client->>Client: Створити svpn0 з host N+2 у спільному subnet
-    Client->>Host: Handshake version + shuffle-split profile
-    Host-->>Client: Handshake version + shuffle-split profile
+    Client->>Host: Handshake version + websocket-cover profile
+    Host-->>Client: Handshake version + websocket-cover profile
     Client->>Host: Запустити tunnel pumps
     Run->>Run: Перевірити IPv4 та IPv6 peers
     Run->>Run: Перемкнути IPv4 default route
@@ -184,8 +195,8 @@ flowchart LR
     Browser[Firefox] --> CRoute[Маршрути клієнта]
     CRoute --> ClientTun[svpn0]
     ClientTun --> Shuffle[Shuffle packet window]
-    Shuffle --> Frame[Split into TunnelFrames]
-    Frame --> HTTPS[TLS + HTTP Upgrade<br/>TCP 443]
+    Shuffle --> Frame[Split and pad TunnelFrames]
+    Frame --> HTTPS[TLS + WebSocket<br/>TCP 443]
     HTTPS --> Unframe[Відновлений IP packet]
     Unframe --> Router[TunnelPacketRouter]
     Router --> ServerTun[shared svpn0]
@@ -218,7 +229,7 @@ flowchart LR
 | Tunnel IPv6 | `fd42:8::X/64`, connected route `fd42:8::/64` | `fd42:8::1/64` на одному `svpn0` |
 | Default IPv4 | Перемикається на `svpn0` | Forward + NAT44 у зовнішню мережу |
 | Default IPv6 | Додається через `svpn0` з metric `50` | Forward + NAT66 у зовнішню мережу |
-| VPN transport | Прямий route до public IPv4 droplet, TLS SNI `vpn.twocubes.io` | HTTPS listener на `0.0.0.0:443` |
+| VPN transport | Прямий route до public IPv4 droplet, WSS із SNI `vpn.twocubes.io` | Kestrel HTTPS/WSS на `0.0.0.0:443` |
 
 Metric IPv6-маршруту можна змінити через `VPN_ROUTE_METRIC`. Скрипт перевіряє фактичний результат `ip route get` для обох сімейств адрес і завершується з помилкою, якщо маршрут оминає `svpn0`.
 
@@ -248,9 +259,11 @@ sequenceDiagram
 ## Поточні обмеження
 
 - Сервер має 253 адреси клієнтів і повторно використовує адресу після відключення.
-- TLS автентифікує сервер, але клієнти поки не мають власних identities/certificates.
+- TLS автентифікує сервер, bearer token обмежує доступ до WSS, але клієнти поки
+  не мають окремих identities або ротації credentials.
 - Транспорт працює поверх TCP, тому можливий ефект TCP-over-TCP під час втрат пакетів.
-- `shuffle-split` змінює внутрішній потік, але не приховує destination IP, TLS
+- `websocket-cover` змінює внутрішній потік і відповідає як звичайний сайт на
+  probes, але не приховує destination IP, TLS
   fingerprint, загальний обсяг або timing і не гарантує обхід DPI.
 - Packet reordering може бути помітний протоколам поверх UDP; TCP відновлює
   порядок власним sequence space.
