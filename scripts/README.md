@@ -10,6 +10,12 @@ The executable files in this directory are intentionally thin workflows:
 | `e2e-three-node.sh` | Demonstrate three-region direct mesh, fallback, DNS, and nginx access |
 | `checkout_next_tag.sh` | Move to the next tagged demo stage |
 | `checkout_prev_tag.sh` | Move to the previous tagged demo stage |
+| `deploy-client-ruvds.sh` | Build and install the matching client on an existing RUVDS host |
+| `e2e-ruvds.sh` | Verify the custom tunnel, exit addresses, and Instagram from RUVDS |
+| `e2e-all-protocol-versions.sh` | Test every tagged protocol version from a temporary worktree |
+| `setup-openvpn-wireguard.sh` | Provision comparison OpenVPN and WireGuard servers and client profiles |
+| `e2e-standard-protocols.sh` | Compare OpenVPN and WireGuard data and Instagram access |
+| `ssh-connect-ruvds.sh` | Connect to RUVDS using credentials supplied through the environment |
 
 Supporting code is grouped by where it runs:
 
@@ -40,6 +46,20 @@ The full disposable integration test is:
 ```bash
 ./scripts/e2e-three-node.sh
 ```
+
+## RUVDS protocol-version comparison
+
+Set `RUVDS_IP`, `RUVDS_USER`, and `RUVDS_PASSWORD`, and provide the existing
+DigitalOcean server state in `.vpn-droplet.env`. Then run:
+
+```bash
+./scripts/e2e-all-protocol-versions.sh
+```
+
+The runner tests every `stage-NN-*` tag without moving the main worktree. It
+writes raw logs to the ignored `scripts/results/` directory. Generated standard
+VPN profiles, the RUVDS known-hosts file, local server state, certificates, and
+keys are intentionally ignored and must not be committed.
 
 The current stage defaults deployment and client scripts to the
 `websocket-cover` profile. Deployment generates `VPN_COVER_TOKEN`, stores it in

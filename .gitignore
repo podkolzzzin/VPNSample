@@ -2,6 +2,9 @@
 .vpn-ssh-key
 .vpn-ssh-key.pub
 .vpn-mesh-key
+scripts/.ruvds_known_hosts
+scripts/standard-vpn-clients/
+scripts/results/
 .idea/
 .agents/
 .codex/

@@ -1,0 +1,13 @@
+category	location	version_or_protocol	commit	result	instagram_http	duration_seconds
+custom	RUVDS	stage-01-basic-tunnel	b923a1a8bbfe4c6acc3806325792d1d2fdc20ab8	PASS	200	86
+custom	RUVDS	stage-02-extensible-pipeline	51ee485b1b62558eab1bdfcdfb05a39f6d2b77a5	PASS	200	81
+custom	RUVDS	stage-03-shared-overlay-exit-node	bd1c8945af633891abd38c5a1f0333718419ad53	PASS	200	72
+custom	RUVDS	stage-04-https-transport	d04262ac6b5ac4fc5a0ac094c40a808f684b1414	PASS	200	78
+custom	RUVDS	stage-05-packet-shuffle-split	d685a97a4201a2560689b6ae081e591014f07c2a	PASS	200	87
+custom	RUVDS	stage-06-websocket-cover	a6464adba465e98a77498a7edbee9c1c02bb2b8c	PASS	200	86
+custom	RUVDS	stage-07-overlay-dns	519d22fccbd0b0ae5c85e26992b54f90ecb40c57	PASS	200	123
+custom	RUVDS	stage-08-peer-to-peer-mesh	37dd149d4b5edb32d15eb502c87d8740c6872533	PASS	200	119
+standard	Workspace	OpenVPN	-	PASS	PASS	-
+standard	Workspace	WireGuard	-	PASS	PASS	-
+standard	RUVDS	OpenVPN	-	FAIL	FAIL	-
+standard	RUVDS	WireGuard	-	PARTIAL	FAIL	-
