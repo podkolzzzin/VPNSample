@@ -147,7 +147,18 @@ Protocol/
 Os.Linux/
   Routing/
     # Future: FullTunnelPolicy.cs, SelectedNetworksPolicy.cs
+
+Dns/
+  DnsName.cs
+  NodeRegistrationProtocol.cs
+  OverlayDnsRegistry.cs
+  OverlayDnsServer.cs
 ```
+
+Private naming is deliberately outside the packet-transformation pipeline. The
+separate `VpnSample.Dns` assembly owns registration and DNS wire responses,
+while the server composition root connects each DNS lease to the addresses
+already assigned by `TunnelNetwork`.
 
 ## Important protocol details
 

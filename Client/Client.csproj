@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Dns/VpnSample.Dns.csproj" />
     <ProjectReference Include="../Protocol/VpnSample.Protocol.csproj" />
     <ProjectReference Include="../Os.Linux/VpnSample.Os.Linux.csproj" />
   </ItemGroup>

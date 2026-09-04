@@ -19,9 +19,18 @@ start_vpn_client() {
   local ip=$1
   local key=$2
   local server_ip=$3
+  local node_name=$4
   ssh_options_for "$key" "$work_dir/known_hosts"
   ssh "${SSH_OPTIONS[@]}" "root@$ip" \
-    "nohup env VPN_PROFILE='$VPN_PROFILE' VPN_COVER_TOKEN='$cover_token' VPN_TLS_SERVER_NAME='$tls_server_name' VPN_TLS_PINNED_CERTIFICATE=/opt/vpnsample-client/tls.crt /opt/vpnsample-client/dotnet/dotnet /opt/vpnsample-client/app/Client.dll '$server_ip' '$vpn_port' >/opt/vpnsample-client/client.log 2>&1 </dev/null & echo \$! >/opt/vpnsample-client/client.pid"
+    "nohup env VPN_PROFILE='$VPN_PROFILE' VPN_COVER_TOKEN='$cover_token' VPN_TLS_SERVER_NAME='$tls_server_name' VPN_TLS_PINNED_CERTIFICATE=/opt/vpnsample-client/tls.crt /opt/vpnsample-client/dotnet/dotnet /opt/vpnsample-client/app/Client.dll '$server_ip' '$vpn_port' '$node_name' >/opt/vpnsample-client/client.log 2>&1 </dev/null & echo \$! >/opt/vpnsample-client/client.pid"
+}
+
+configure_overlay_dns() {
+  local ip=$1
+  local key=$2
+  ssh_options_for "$key" "$work_dir/known_hosts"
+  ssh "${SSH_OPTIONS[@]}" "root@$ip" \
+    "resolvectl dns svpn0 '$dns_server_ipv4'; resolvectl domain svpn0 '$VPN_DNS_ZONE'; resolvectl default-route svpn0 false; resolvectl flush-caches"
 }
 
 wait_for_tunnel() {

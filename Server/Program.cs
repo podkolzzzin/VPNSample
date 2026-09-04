@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using VpnSample.Dns;
 using VpnSample.Os;
 using VpnSample.Protocol;
 
@@ -38,6 +39,11 @@ await using var exitNode = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
     Ipv6Address: $"{network.ServerIpv6}/{network.Ipv6InterfacePrefixLength}"));
 var router = new TunnelPacketRouter(exitNode, network);
 Task exitNodeRouting = router.RouteExitNodePacketsAsync();
+var dnsRegistry = new OverlayDnsRegistry();
+await using var dnsServer = new OverlayDnsServer(
+    new System.Net.IPEndPoint(System.Net.IPAddress.Parse(network.ServerIpv4), 53),
+    dnsRegistry);
+Task dnsServing = dnsServer.RunAsync();
 var clientSlots = new bool[network.ClientCapacity];
 
 WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
@@ -64,15 +70,16 @@ app.MapFallback(() => Results.NotFound());
 
 Console.WriteLine(
     $"Serving https://{tlsServerName}:{port}/ with a protected WebSocket tunnel " +
-    $"using profile '{profileName}', overlay {network.Ipv4Network} / {network.Ipv6Network}");
+    $"using profile '{profileName}', overlay {network.Ipv4Network} / {network.Ipv6Network}, " +
+    $"DNS zone .{dnsRegistry.Zone}");
 
 Task webServer = app.RunAsync();
-Task completed = await Task.WhenAny(webServer, exitNodeRouting);
-if (completed == exitNodeRouting)
+Task completed = await Task.WhenAny(webServer, exitNodeRouting, dnsServing);
+if (completed != webServer)
 {
     await app.StopAsync();
-    await exitNodeRouting;
 }
+await completed;
 await webServer;
 
 async Task HandleClientAsync(HttpContext context)
@@ -101,12 +108,32 @@ async Task HandleClientAsync(HttpContext context)
     {
         WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
         await using var transport = new WebSocketDuplexStream(socket);
+        string nodeName = await NodeRegistrationProtocol.ReadRequestAsync(
+            transport,
+            context.RequestAborted);
         TunnelAddresses addresses = network.GetAddresses(clientNumber);
+        using OverlayDnsRegistration? dnsRegistration = dnsRegistry.TryRegister(
+            nodeName,
+            System.Net.IPAddress.Parse(addresses.ClientIpv4),
+            System.Net.IPAddress.Parse(addresses.ClientIpv6));
+        if (dnsRegistration is null)
+        {
+            await NodeRegistrationProtocol.WriteNameInUseAsync(
+                transport,
+                context.RequestAborted);
+            Console.WriteLine($"Rejected duplicate DNS name: {nodeName}.{dnsRegistry.Zone}");
+            return;
+        }
+
+        await NodeRegistrationProtocol.WriteAcceptedAsync(
+            transport,
+            clientNumber,
+            context.RequestAborted);
         await using RoutedPacketEndpoint peer = router.RegisterPeer(addresses);
 
-        await transport.WriteAsync(new[] { checked((byte)clientNumber) });
         Console.WriteLine(
-            $"Client {clientNumber} connected: {context.Connection.RemoteIpAddress}, " +
+            $"Client {clientNumber} connected as {dnsRegistration.Record.FullName}: " +
+            $"{context.Connection.RemoteIpAddress}, " +
             $"{addresses.ClientIpv4}, {addresses.ClientIpv6}");
         await using var pipeline = TunnelProfileFactory.Create(
             profileName,

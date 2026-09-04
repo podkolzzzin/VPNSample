@@ -11,10 +11,13 @@ flowchart LR
         Route[Linux routing]
         CTun[svpn0<br/>10.8.0.X/24 / fd42:8::X/64]
         CLinux[LinuxTunDevice]
+        Resolver[systemd-resolved<br/>.vpn → 10.8.0.1]
         CProtocol[TunnelPipeline<br/>websocket-cover profile]
         CTcp[ClientWebSocket<br/>WSS]
 
         App <--> Route
+        App --> Resolver
+        Resolver --> Route
         Route <--> CTun
         CTun <--> CLinux
         CLinux <-->|IPacketEndpoint| CProtocol
@@ -31,11 +34,13 @@ flowchart LR
         STun[one svpn0<br/>10.8.0.1/24 / fd42:8::1/64]
         Forward[Linux IP forwarding]
         Nat[NAT44 / NAT66]
+        Dns[VpnSample.Dns<br/>authoritative .vpn]
 
         STcp <-->|кадри тунелю| SProtocol
         SProtocol <-->|RoutedPacketEndpoint| Router
         Router <-->|exit-node packets| SLinux
         SLinux <--> STun
+        STun <--> Dns
         STun <--> Forward
         Forward <--> Nat
     end
@@ -44,7 +49,8 @@ flowchart LR
 ```
 
 Кожен клієнт має окреме TCP-з'єднання, але сервер має лише один TUN `svpn0`.
-Сервер передає номер `N` одним байтом перед першим кадром, а клієнт отримує host
+Після WebSocket Upgrade клієнт надсилає своє DNS-ім'я. Сервер атомарно резервує
+ім'я та передає номер `N` у registration response, а клієнт отримує host
 `N + 2` у спільних мережах `10.8.0.0/24` і `fd42:8::/64`. `TunnelPacketRouter`
 пересилає overlay-пакети безпосередньо у connection адресата, а internet traffic
 передає у серверний TUN для Linux forwarding і NAT. Wire traffic і bearer token
@@ -64,12 +70,15 @@ flowchart TB
     Client[VpnSample.Client<br/>composition root]
     Server[VpnSample.Server<br/>composition root]
     Linux[VpnSample.Os.Linux<br/>LinuxTunDevice]
+    Dns[VpnSample.Dns<br/>registry + DNS wire protocol]
     Protocol[VpnSample.Protocol<br/>pipeline + stages + wire codec]
     Kernel[Linux kernel<br/>/dev/net/tun, ip, routes]
 
     Client --> Protocol
+    Client --> Dns
     Client --> Linux
     Server --> Protocol
+    Server --> Dns
     Server --> Linux
     Linux --> Protocol
     Linux --> Kernel
@@ -80,6 +89,7 @@ flowchart TB
 | Рівень | Відповідальність | Не знає про |
 |---|---|---|
 | `VpnSample.Protocol` | Межа `IPacketEndpoint`, pipeline стадій, wire codec, handshake, packet router і таблиця overlay IP → connection | `/dev/net/tun`, системні маршрути, DigitalOcean |
+| `VpnSample.Dns` | Валідація імен, registration handshake, lease registry та authoritative A/AAAA DNS для `.vpn` | TUN, TLS, DigitalOcean |
 | `VpnSample.Os.Linux` | Створення TUN, адреси інтерфейсу, незалежні потоки читання/запису | TCP, сервер, формат розгортання |
 | `VpnSample.Client` | WSS-підключення, композиція протоколу з Linux endpoint | Налаштування cloud-сервера |
 | `VpnSample.Server` | HTTPS cover site, WSS endpoint, один exit-node TUN і композиція router/pipeline | Клієнтські default routes |
@@ -172,12 +182,15 @@ sequenceDiagram
     Client->>Host: GET /api/v1/events + WebSocket Upgrade + bearer token
     Host-->>Client: 101 Switching Protocols
     Host->>Host: Створити один exit-node svpn0 під час старту
-    Host-->>Client: Номер клієнта N
+    Client->>Host: Зареєструвати node-name
+    Host-->>Client: Registration accepted + номер клієнта N
+    Host->>Host: Додати node-name.vpn → IPv4/IPv6
     Host->>Host: Зареєструвати IP клієнта у TunnelPacketRouter
     Client->>Client: Створити svpn0 з host N+2 у спільному subnet
     Client->>Host: Handshake version + websocket-cover profile
     Host-->>Client: Handshake version + websocket-cover profile
     Client->>Host: Запустити tunnel pumps
+    Run->>Run: Направити зону .vpn на 10.8.0.1 через svpn0
     Run->>Run: Перевірити IPv4 та IPv6 peers
     Run->>Run: Перемкнути IPv4 default route
     Run->>Run: Додати IPv6 default route metric 50
@@ -185,6 +198,19 @@ sequenceDiagram
 ```
 
 Прямий маршрут до публічної IPv4-адреси droplet залишається через звичайний gateway. Це не дає TCP-транспорту спробувати пройти через власний тунель.
+
+## Private DNS
+
+`VpnSample.Dns` — окрема OS-neutral збірка. `OverlayDnsRegistry` утримує lease
+імені лише поки відповідний WebSocket підключений. `OverlayDnsServer` слухає UDP
+53 на серверній overlay-адресі `10.8.0.1` і авторитетно відповідає A та AAAA для
+`<node>.vpn`. Однакове ім'я не може бути зареєстроване двічі; після disconnect
+lease звільняється.
+
+DNS-запит проходить через той самий тунель: `systemd-resolved` відправляє `.vpn`
+на `10.8.0.1`, серверний kernel передає пакет UDP socket DNS-сервера, а відповідь
+повертається клієнту через server TUN і `TunnelPacketRouter`. Інші DNS-зони не
+маршрутизуються до приватного resolver link.
 
 ## Шлях пакета
 
@@ -230,6 +256,7 @@ flowchart LR
 | Default IPv4 | Перемикається на `svpn0` | Forward + NAT44 у зовнішню мережу |
 | Default IPv6 | Додається через `svpn0` з metric `50` | Forward + NAT66 у зовнішню мережу |
 | VPN transport | Прямий route до public IPv4 droplet, WSS із SNI `vpn.twocubes.io` | Kestrel HTTPS/WSS на `0.0.0.0:443` |
+| Private DNS | `systemd-resolved`: зона `.vpn` через `svpn0` | UDP `10.8.0.1:53`, authoritative A/AAAA |
 
 Metric IPv6-маршруту можна змінити через `VPN_ROUTE_METRIC`. Скрипт перевіряє фактичний результат `ip route get` для обох сімейств адрес і завершується з помилкою, якщо маршрут оминає `svpn0`.
 
@@ -244,6 +271,7 @@ sequenceDiagram
     participant Tun as LinuxTunDevice
 
     User->>Run: Ctrl+C або завершення
+    Run->>Run: Відновити DNS-конфігурацію svpn0
     Run->>Client: SIGTERM
     Client->>Protocol: Cancellation
     Protocol->>Tun: InterruptReadAsync
@@ -259,6 +287,7 @@ sequenceDiagram
 ## Поточні обмеження
 
 - Сервер має 253 адреси клієнтів і повторно використовує адресу після відключення.
+- DNS працює лише через UDP, підтримує A/AAAA/ANY і тримає записи лише в пам'яті.
 - TLS автентифікує сервер, bearer token обмежує доступ до WSS, але клієнти поки
   не мають окремих identities або ротації credentials.
 - Транспорт працює поверх TCP, тому можливий ефект TCP-over-TCP під час втрат пакетів.

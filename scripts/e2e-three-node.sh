@@ -22,6 +22,9 @@ CLIENT_A_REGION=${CLIENT_A_REGION:-fra1}
 CLIENT_B_REGION=${CLIENT_B_REGION:-nyc3}
 DO_SIZE=${DO_SIZE:-s-1vcpu-1gb}
 VPN_PROFILE=${VPN_PROFILE:-websocket-cover}
+VPN_DNS_ZONE=vpn
+CLIENT_A_NAME=${CLIENT_A_NAME:-nginx-node}
+CLIENT_B_NAME=${CLIENT_B_NAME:-requester-node}
 
 usage() {
   cat <<'EOF'
@@ -29,8 +32,8 @@ Usage: scripts/e2e-three-node.sh
 
 Create three temporary DigitalOcean droplets in distinct regions, run the VPN
 server on one and VPN clients on the other two, and verify peer-to-peer IPv4,
-IPv6, and nginx HTTP traffic through the VPN. All resources are removed when
-the script exits, including after a failed check or Ctrl-C.
+IPv6, private DNS, and nginx-by-name traffic through the VPN. All resources are
+removed when the script exits, including after a failed check or Ctrl-C.
 
 Environment:
   SERVER_REGION    VPN server region (default: ams3)
@@ -38,6 +41,8 @@ Environment:
   CLIENT_B_REGION  requester client region (default: nyc3)
   DO_SIZE          Droplet size (default: s-1vcpu-1gb)
   VPN_PROFILE      Tunnel pipeline profile (default: websocket-cover)
+  CLIENT_A_NAME    DNS name of the nginx node (default: nginx-node)
+  CLIENT_B_NAME    DNS name of the requester node (default: requester-node)
 
 Prerequisites: authenticated doctl, dotnet 10, ssh, scp, and ssh-keygen.
 This test creates billable DigitalOcean resources for the duration of the run.
@@ -59,6 +64,10 @@ need_all doctl dotnet ssh scp ssh-keygen
   && $CLIENT_A_REGION != "$CLIENT_B_REGION" ]] \
   || fail "SERVER_REGION, CLIENT_A_REGION, and CLIENT_B_REGION must be distinct."
 validate_profile "$VPN_PROFILE"
+validate_node_name "$CLIENT_A_NAME"
+validate_node_name "$CLIENT_B_NAME"
+[[ ${CLIENT_A_NAME,,} != "${CLIENT_B_NAME,,}" ]] \
+  || fail "CLIENT_A_NAME and CLIENT_B_NAME must be distinct."
 doctl account get >/dev/null
 
 work_dir=$(mktemp -d /tmp/vpnsample-three-node.XXXXXXXX)
@@ -137,6 +146,10 @@ validate_cover_token "$cover_token"
 log "Publishing current VPN client..."
 dotnet publish "$PROJECT_ROOT/Client/Client.csproj" -c Release --no-self-contained \
   -o "$publish_dir" >/dev/null
+read -r dns_server_ipv4 dns_server_ipv6 \
+  < <(dotnet "$publish_dir/Client.dll" --print-server-addresses)
+[[ -n $dns_server_ipv4 && -n $dns_server_ipv6 ]] \
+  || fail "Client did not report the overlay DNS server addresses."
 
 log "Preparing client A with nginx..."
 wait_for_ssh "$client_a_ip" "$client_a_key" root 36 5 "$work_dir/known_hosts"
@@ -147,11 +160,13 @@ wait_for_ssh "$client_b_ip" "$client_b_key" root 36 5 "$work_dir/known_hosts"
 install_client "$client_b_ip" "$client_b_key" false
 
 log "Connecting client A first..."
-start_vpn_client "$client_a_ip" "$client_a_key" "$server_ip"
+start_vpn_client "$client_a_ip" "$client_a_key" "$server_ip" "$CLIENT_A_NAME"
 wait_for_tunnel "$client_a_ip" "$client_a_key"
+configure_overlay_dns "$client_a_ip" "$client_a_key"
 
 log "Connecting client B second..."
-start_vpn_client "$client_b_ip" "$client_b_key" "$server_ip"
+start_vpn_client "$client_b_ip" "$client_b_key" "$server_ip" "$CLIENT_B_NAME"
 wait_for_tunnel "$client_b_ip" "$client_b_key"
+configure_overlay_dns "$client_b_ip" "$client_b_key"
 
 verify_three_node_topology

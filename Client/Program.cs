@@ -1,4 +1,5 @@
 using System.Security.Cryptography.X509Certificates;
+using VpnSample.Dns;
 using VpnSample.Os;
 using VpnSample.Protocol;
 
@@ -16,14 +17,16 @@ if (args is ["--print-server-addresses"])
     return;
 }
 
-if (args.Length != 2)
+if (args.Length is < 2 or > 3)
 {
-    Console.WriteLine("Usage: sudo dotnet run --project Client -- <server> <port>");
+    Console.WriteLine("Usage: sudo dotnet run --project Client -- <server> <port> [node-name]");
     return;
 }
 
 string server = args[0];
 int port = int.Parse(args[1]);
+string nodeName = DnsName.NormalizeNodeName(
+    args.Length == 3 ? args[2] : Environment.MachineName);
 string profileName = Environment.GetEnvironmentVariable("VPN_PROFILE") ??
     TunnelProfileFactory.DefaultProfileName;
 if (!TunnelProfileFactory.IsSupported(profileName))
@@ -46,9 +49,8 @@ await using WebSocketDuplexStream webSocket = await WebSocketTunnelTransport.Con
     accessToken,
     pinnedCertificate);
 
-var assignment = new byte[1];
-await webSocket.ReadExactlyAsync(assignment);
-int clientNumber = assignment[0];
+await NodeRegistrationProtocol.WriteRequestAsync(webSocket, nodeName);
+int clientNumber = await NodeRegistrationProtocol.ReadResponseAsync(webSocket);
 TunnelAddresses addresses = network.GetAddresses(clientNumber);
 
 await using var tun = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
@@ -57,6 +59,7 @@ await using var tun = await LinuxTunDevice.OpenAsync(new LinuxTunOptions(
     Ipv6Address: $"{addresses.ClientIpv6}/{network.Ipv6InterfacePrefixLength}"));
 
 Console.WriteLine($"Connected as client {clientNumber}.");
+Console.WriteLine($"DNS name: {DnsName.GetFullName(nodeName)}");
 Console.WriteLine($"IPv4: {addresses.ClientIpv4} in {network.Ipv4Network}");
 Console.WriteLine($"IPv6: {addresses.ClientIpv6} in {network.Ipv6Network}");
 Console.WriteLine(

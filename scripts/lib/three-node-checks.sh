@@ -23,6 +23,8 @@ verify_three_node_topology() {
 
   check_peer_reachability
 
+  check_overlay_dns
+
   log "Checking IPv4 and IPv6 exit-node forwarding from both clients..."
   check_exit_node "$client_a_ip" "$client_a_key"
   check_exit_node "$client_b_ip" "$client_b_key"
@@ -75,12 +77,13 @@ check_peer_reachability() {
 }
 
 check_nginx_reachability() {
-  log "Requesting nginx on client A from client B through the VPN..."
+  local nginx_name=$CLIENT_A_NAME.$VPN_DNS_ZONE
+  log "Requesting nginx as $nginx_name from client B through the VPN..."
   ssh_options_for "$client_b_key" "$work_dir/known_hosts"
   http_v4=$(ssh "${SSH_OPTIONS[@]}" "root@$client_b_ip" \
-    "curl --noproxy '*' --fail --silent --show-error --connect-timeout 5 --max-time 15 'http://$client_a_tunnel_v4/'")
+    "curl -4 --noproxy '*' --fail --silent --show-error --connect-timeout 5 --max-time 15 'http://$nginx_name/'")
   http_v6=$(ssh "${SSH_OPTIONS[@]}" "root@$client_b_ip" \
-    "curl --noproxy '*' --fail --silent --show-error --connect-timeout 5 --max-time 15 'http://[$client_a_tunnel_v6]/'")
+    "curl -6 --noproxy '*' --fail --silent --show-error --connect-timeout 5 --max-time 15 'http://$nginx_name/'")
   [[ $http_v4 == vpn-mesh-nginx-ok ]] \
     || fail "Unexpected nginx response over IPv4: $http_v4"
   [[ $http_v6 == vpn-mesh-nginx-ok ]] \
@@ -95,12 +98,26 @@ check_nginx_reachability() {
     || fail "nginx did not record client B's overlay IPv6 address."
 }
 
+check_overlay_dns() {
+  local nginx_name=$CLIENT_A_NAME.$VPN_DNS_ZONE
+  local requester_name=$CLIENT_B_NAME.$VPN_DNS_ZONE
+  log "Resolving $nginx_name and $requester_name through overlay DNS..."
+  ssh_options_for "$client_b_key" "$work_dir/known_hosts"
+  ssh "${SSH_OPTIONS[@]}" "root@$client_b_ip" \
+    "resolvectl query '$nginx_name' | grep -F '$client_a_tunnel_v4' && resolvectl query '$nginx_name' | grep -F '$client_a_tunnel_v6'"
+  ssh_options_for "$client_a_key" "$work_dir/known_hosts"
+  ssh "${SSH_OPTIONS[@]}" "root@$client_a_ip" \
+    "resolvectl query '$requester_name' | grep -F '$client_b_tunnel_v4' && resolvectl query '$requester_name' | grep -F '$client_b_tunnel_v6'"
+}
+
 print_three_node_result() {
   printf '\n===== THREE-NODE RESULT =====\n'
   printf 'PASS: the server used one shared TUN and clients selected automatic overlay routes.\n'
   printf 'PASS: clients reached each other through the VPN over IPv4 and IPv6.\n'
+  printf 'PASS: private DNS resolved both client names to their IPv4 and IPv6 addresses.\n'
   printf 'PASS: both clients reached the internet through the exit node over IPv4 and IPv6.\n'
-  printf 'PASS: client B fetched nginx from client A over IPv4 and IPv6.\n'
+  printf 'PASS: client B fetched nginx from %s.%s over IPv4 and IPv6.\n' \
+    "$CLIENT_A_NAME" "$VPN_DNS_ZONE"
   printf 'Server region/IP: %s / %s\n' "$SERVER_REGION" "$server_ip"
   printf 'Client A region/overlay: %s / %s / %s\n' \
     "$CLIENT_A_REGION" "$client_a_tunnel_v4" "$client_a_tunnel_v6"

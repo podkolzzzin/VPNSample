@@ -5,6 +5,10 @@ in one shared overlay subnet and exchanges raw IPv4 and IPv6 packets with the se
 over its own TCP connection. The server uses one TUN as an IPv4/IPv6 exit node and
 routes client-to-client packets in .NET.
 
+Clients register a node name when they connect. The separate `VpnSample.Dns`
+assembly serves authoritative A and AAAA records in the private `.vpn` zone, so
+nodes can reach one another as, for example, `nginx-node.vpn`.
+
 Current architecture, deployment flow, and IPv4/IPv6 routing diagrams are in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -23,7 +27,8 @@ The earlier `shuffle-split` and no-tricks `baseline` profiles remain available.
 
 - Linux on both machines
 - .NET 10 SDK
-- `iproute2`; `iptables` for internet forwarding; `openssl` for demo certificates
+- `iproute2`; `systemd-resolved`; `iptables` for internet forwarding; `openssl`
+  for demo certificates
 - root privileges for `/dev/net/tun` and network configuration
 - TCP port 443 allowed through the server firewall
 
@@ -35,7 +40,7 @@ From this directory:
 dotnet build VPNSample.slnx
 ```
 
-This commit is the sixth demo stage, `stage-06-websocket-cover`.
+This commit is the seventh demo stage, `stage-07-overlay-dns`.
 
 Move through the tagged demo stages from any checked-out stage:
 
@@ -117,9 +122,11 @@ To reproduce the server plus two-client test in three DigitalOcean regions:
 The script creates a VPN server in Amsterdam, an nginx client in Frankfurt,
 and a requester client in New York. It verifies bidirectional IPv4 and IPv6
 ping, confirms TLS plus WebSocket on both clients, checks internet
-reachability through the exit node, fetches nginx over both
-tunnel address families, checks nginx's access log for the requester's overlay
-addresses, and deletes all temporary resources on exit. The regions and droplet
+reachability through the exit node, resolves both private node names, fetches
+nginx as `nginx-node.vpn` over both tunnel address families, checks nginx's
+access log for the requester's overlay addresses, and deletes all temporary
+resources on exit. The node names can be overridden with `CLIENT_A_NAME` and
+`CLIENT_B_NAME`. The regions and droplet
 size can be overridden with `SERVER_REGION`, `CLIENT_A_REGION`,
 `CLIENT_B_REGION`, and `DO_SIZE`.
 
@@ -150,7 +157,21 @@ sudo env \
   VPN_TLS_SERVER_NAME=vpn.twocubes.io \
   VPN_TLS_PINNED_CERTIFICATE=/path/to/server.crt \
   VPN_COVER_TOKEN=0123456789abcdef0123456789abcdef \
-  dotnet run --project Client -- SERVER_IP 443
+  dotnet run --project Client -- SERVER_IP 443 my-laptop
+```
+
+The optional final argument is the node's `.vpn` name. Without it, the client
+uses `Environment.MachineName`. The name must be one DNS label of 1-63 letters,
+digits, or hyphens; names are case-insensitive and must be unique among connected
+clients. `scripts/run-vpn.sh --name my-laptop` also configures `systemd-resolved`
+to use `10.8.0.1` for the `.vpn` zone and restores the previous per-link DNS
+settings when the VPN stops.
+
+Once two clients are connected, applications can use their private names:
+
+```bash
+ping nginx-node.vpn
+curl http://nginx-node.vpn/
 ```
 
 The server prints the assigned addresses. Client zero can test its peer with:
@@ -288,6 +309,8 @@ with `-D POSTROUTING` instead of `-A POSTROUTING`.
   and flushes sparse traffic after a short bounded delay.
 - `Protocol/Stages/FragmentStage.cs` splits and reassembles tunnel frames.
 - `Protocol/Stages/PaddingStage.cs` hides exact fragment lengths behind buckets.
+- `Dns/` is a separate assembly containing node registration, the in-memory
+  lease registry, and the authoritative UDP DNS server for `.vpn`.
 - `Protocol/WebSocketTunnelTransport.cs` creates the pinned, authenticated WSS
   client while `WebSocketDuplexStream.cs` adapts WebSocket messages to the
   pipeline's existing `Stream` boundary.

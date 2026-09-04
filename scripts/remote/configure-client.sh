@@ -10,11 +10,12 @@ if command -v cloud-init >/dev/null 2>&1; then
   cloud-init status --wait >/dev/null
 fi
 
-packages=(ca-certificates curl iproute2 iputils-ping)
+packages=(ca-certificates curl iproute2 iputils-ping systemd-resolved)
 [[ $install_nginx == true ]] && packages+=(nginx)
 [[ $install_probe_tools == true ]] && packages+=(net-tools python3)
 apt-get -o DPkg::Lock::Timeout=300 update -qq
 apt-get -o DPkg::Lock::Timeout=300 install -y -qq "${packages[@]}" >/dev/null
+systemctl enable --now systemd-resolved >/dev/null
 
 mkdir -p "$install_root/app" "$install_root/dotnet"
 if ! "$install_root/dotnet/dotnet" --list-runtimes 2>/dev/null \

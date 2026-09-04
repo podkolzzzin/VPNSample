@@ -6,8 +6,8 @@ The executable files in this directory are intentionally thin workflows:
 |---|---|
 | `create-droplet.sh` | Create or delete one state-file-owned DigitalOcean droplet |
 | `deploy-server.sh` | Publish and deploy the VPN server to that droplet |
-| `run-vpn.sh` | Run the local client and temporarily manage local routes |
-| `e2e-three-node.sh` | Orchestrate the disposable three-region integration test |
+| `run-vpn.sh` | Run the local client and temporarily manage routes plus private DNS |
+| `e2e-three-node.sh` | Demonstrate three-region routing, DNS names, and nginx access |
 | `checkout_next_tag.sh` | Move to the next tagged demo stage |
 | `checkout_prev_tag.sh` | Move to the previous tagged demo stage |
 
@@ -46,3 +46,8 @@ The current stage defaults deployment and client scripts to the
 the selected state file, and supplies it to clients without logging it. Set
 `VPN_PROFILE=shuffle-split` or `VPN_PROFILE=baseline` consistently on both sides
 to compare pipeline behavior while retaining the WebSocket transport.
+
+`run-vpn.sh --name NAME` registers `NAME.vpn` and routes the private zone to the
+server through `systemd-resolved`. The three-node E2E registers `nginx-node` and
+`requester-node`, verifies their A and AAAA answers, then requests nginx by DNS
+name rather than by an address.

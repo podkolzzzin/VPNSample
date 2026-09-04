@@ -35,8 +35,9 @@ public sealed class TunnelPacketRouter(IPacketEndpoint exitNode, TunnelNetwork n
         byte[] buffer = ArrayPool<byte>.Shared.Rent(TunnelFrame.MaximumPayloadLength);
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int length = await exitNode.PacketReader.ReadAsync(
                     buffer.AsMemory(0, TunnelFrame.MaximumPayloadLength),
                     cancellationToken);

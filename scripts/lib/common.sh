@@ -56,6 +56,11 @@ validate_cover_token() {
     || fail "VPN_COVER_TOKEN must contain 32-128 URL-safe characters."
 }
 
+validate_node_name() {
+  [[ $1 =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] \
+    || fail "VPN node names must be 1-63 characters containing letters, digits, or hyphens."
+}
+
 validate_dns_name() {
   [[ $1 =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
     || fail "VPN_TLS_SERVER_NAME is not a valid DNS name."

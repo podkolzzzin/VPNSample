@@ -8,6 +8,8 @@ VPNSAMPLE_LOG_PREFIX=run-vpn
 source "$SCRIPT_DIR/lib/common.sh"
 # shellcheck source=lib/routes.sh
 source "$SCRIPT_DIR/lib/routes.sh"
+# shellcheck source=lib/dns.sh
+source "$SCRIPT_DIR/lib/dns.sh"
 STATE_FILE=${VPN_STATE_FILE:-$PROJECT_ROOT/.vpn-droplet.env}
 CLIENT_PROJECT=$PROJECT_ROOT/Client/Client.csproj
 CLIENT_DLL=$PROJECT_ROOT/Client/bin/Release/net10.0/Client.dll
@@ -19,11 +21,12 @@ VPN_PROFILE=${VPN_PROFILE:-websocket-cover}
 VPN_COVER_TOKEN=${VPN_COVER_TOKEN:-}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-}
 VPN_TLS_PINNED_CERTIFICATE=${VPN_TLS_PINNED_CERTIFICATE:-}
+VPN_NODE_NAME=${VPN_NODE_NAME:-}
 peer_only=false
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-vpn.sh [--peer-only] [--state-file PATH]
+Usage: scripts/run-vpn.sh [--peer-only] [--name NAME] [--state-file PATH]
 
 Start the local VPN client using the droplet IP and port from the state file.
 By default, the script routes IPv4 and IPv6 traffic through the tunnel
@@ -32,6 +35,7 @@ routes when the client exits or Ctrl-C is pressed.
 
 Options:
   --peer-only        Create the tunnel without replacing the default route
+  --name NAME        Register NAME in the private .vpn DNS zone
   --state-file PATH  State file location
   -h, --help         Show this help
 
@@ -42,6 +46,7 @@ Environment:
   VPN_TRACE_PCAP     Base path for a Wireshark-compatible capture
   VPN_PROFILE        Tunnel pipeline profile (default: websocket-cover)
   VPN_COVER_TOKEN    WebSocket access token (state file default)
+  VPN_NODE_NAME      Node name (default: this machine's hostname)
   VPN_TLS_SERVER_NAME  HTTPS SNI/Host name (state file default: vpn.twocubes.io)
   VPN_TLS_PINNED_CERTIFICATE  Optional pinned server certificate
 EOF
@@ -50,18 +55,20 @@ EOF
 while (($#)); do
   case $1 in
     --peer-only) peer_only=true; shift ;;
+    --name) VPN_NODE_NAME=${2:?Missing value for --name}; shift 2 ;;
     --state-file) STATE_FILE=${2:?Missing value for --state-file}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "Unknown option: $1 (use --help)" ;;
   esac
 done
 
-need_all dotnet ip ping
+need_all dotnet hostname ip ping resolvectl
 [[ -f $CLIENT_PROJECT ]] || fail "Client project not found: $CLIENT_PROJECT"
 load_state "$STATE_FILE"
 : "${DROPLET_IP:?DROPLET_IP is missing from $STATE_FILE}"
 VPN_PORT=${VPN_PORT:-443}
 VPN_TLS_SERVER_NAME=${VPN_TLS_SERVER_NAME:-vpn.twocubes.io}
+VPN_NODE_NAME=${VPN_NODE_NAME:-$(hostname --short)}
 : "${VPN_COVER_TOKEN:?VPN_COVER_TOKEN is missing from $STATE_FILE}"
 [[ $VPN_ROUTE_METRIC =~ ^[0-9]+$ ]] && ((VPN_ROUTE_METRIC >= 1 && VPN_ROUTE_METRIC <= 4294967295)) \
   || fail "VPN_ROUTE_METRIC must be an integer from 1 to 4294967295."
@@ -70,6 +77,7 @@ validate_boolean VPN_TRACE_PACKETS "$VPN_TRACE_PACKETS"
 validate_boolean VPN_TRACE_HEX "$VPN_TRACE_HEX"
 validate_profile "$VPN_PROFILE"
 validate_cover_token "$VPN_COVER_TOKEN"
+validate_node_name "$VPN_NODE_NAME"
 
 if ((EUID != 0)); then
   need sudo
@@ -79,6 +87,7 @@ if ((EUID != 0)); then
   log "Root privileges are required for TUN and route configuration; invoking sudo..."
   sudo_args=()
   [[ $peer_only == true ]] && sudo_args+=(--peer-only)
+  sudo_args+=(--name "$VPN_NODE_NAME")
   exec sudo env \
     "PATH=$PATH" \
     "VPN_STATE_FILE=$STATE_FILE" \
@@ -111,9 +120,13 @@ vpn_routes_capture "$DROPLET_IP"
 
 client_pid=
 routes_changed=false
+dns_configured=false
 cleanup() {
   exit_status=$?
   trap - EXIT INT TERM
+  if [[ $dns_configured == true ]]; then
+    vpn_dns_revert svpn0
+  fi
   if [[ -n $client_pid ]]; then
     kill "$client_pid" 2>/dev/null || true
     wait "$client_pid" 2>/dev/null || true
@@ -132,7 +145,7 @@ env \
   "VPN_TLS_SERVER_NAME=$VPN_TLS_SERVER_NAME" \
   "VPN_TLS_PINNED_CERTIFICATE=$VPN_TLS_PINNED_CERTIFICATE" \
   "VPN_COVER_TOKEN=$VPN_COVER_TOKEN" \
-  "$dotnet_bin" "$CLIENT_DLL" "$DROPLET_IP" "$VPN_PORT" &
+  "$dotnet_bin" "$CLIENT_DLL" "$DROPLET_IP" "$VPN_PORT" "$VPN_NODE_NAME" &
 client_pid=$!
 
 for attempt in $(seq 1 30); do
@@ -147,6 +160,10 @@ done
 client_ipv6=$(ip -o -6 address show dev svpn0 scope global \
   | awk '{ split($4, address, "/"); print address[1]; exit }')
 [[ -n $client_ipv6 ]] || fail "Could not read the assigned IPv6 address from svpn0."
+
+log "Routing the .vpn DNS zone to $server_ipv4 through svpn0..."
+dns_configured=true
+vpn_dns_apply svpn0 "$server_ipv4" vpn
 
 log "Tunnel is up. Testing IPv4 and IPv6 peers..."
 ping -c 1 -W 3 "$server_ipv4" >/dev/null || fail "IPv4 tunnel peer did not answer."

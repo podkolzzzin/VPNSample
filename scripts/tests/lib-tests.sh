@@ -12,6 +12,8 @@ source "$LIB_DIR/ssh.sh"
 source "$LIB_DIR/routes.sh"
 # shellcheck source=../lib/digitalocean.sh
 source "$LIB_DIR/digitalocean.sh"
+# shellcheck source=../lib/dns.sh
+source "$LIB_DIR/dns.sh"
 
 assert_equal() {
   local expected=$1
@@ -27,6 +29,7 @@ printf 'SAMPLE_VALUE=%q\n' 'value with spaces' >"$state_file"
 assert_equal 'value with spaces' "$(state_value "$state_file" SAMPLE_VALUE)" \
   'state_value'
 validate_cover_token 0123456789abcdef0123456789abcdef
+validate_node_name nginx-node
 
 ssh_options_for /tmp/test-key /tmp/test-known-hosts
 assert_equal /tmp/test-key "${SSH_OPTIONS[1]}" 'SSH identity path'
@@ -61,6 +64,15 @@ assert_equal svpn0 "$(route_interface 4 1.1.1.1)" 'IPv4 route selection'
 assert_equal svpn0 "$(route_interface 6 2606:4700:4700::1111)" \
   'IPv6 route selection'
 vpn_routes_restore 203.0.113.10 50
+
+dns_calls=()
+resolvectl() { dns_calls+=("$*"); }
+vpn_dns_apply svpn0 10.8.0.1 vpn
+assert_equal 'dns svpn0 10.8.0.1' "${dns_calls[0]}" 'DNS server setup'
+assert_equal 'domain svpn0 vpn' "${dns_calls[1]}" 'DNS zone setup'
+assert_equal 'default-route svpn0 false' "${dns_calls[2]}" 'DNS default route setup'
+vpn_dns_revert svpn0
+assert_equal 'revert svpn0' "${dns_calls[4]}" 'DNS cleanup'
 
 droplet_gets=0
 sleep() { :; }
